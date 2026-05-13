@@ -4,7 +4,7 @@ from tkinter import filedialog, messagebox, ttk
 import numpy as np
 import pandas as pd
 
-from abc_fit import SUMMARY_COLS, fit_equal_mu, fit_equal_mu_refined, fit_unequal_mu
+from abc_fit import SUMMARY_COLS, fit_equal_mu_refined, fit_unequal_mu
 
 
 def simulate(mu_ab, mu_ba, seed=0):
@@ -37,6 +37,15 @@ def get_mu_grid():
         mu_max = float(mu_max_entry.get())
         steps = int(steps_entry.get())
 
+        if mu_min < 0:
+            raise ValueError
+
+        if mu_max < 0:
+            raise ValueError
+
+        if mu_min > mu_max:
+            raise ValueError
+
         if steps < 2:
             raise ValueError
 
@@ -55,6 +64,9 @@ def get_simulation_params():
         mu_ab = float(mu_ab_entry.get())
         mu_ba = float(mu_ba_entry.get())
         seed = int(seed_entry.get())
+
+        if mu_ab < 0 or mu_ba < 0:
+            raise ValueError
 
         return mu_ab, mu_ba, seed
 
@@ -81,8 +93,8 @@ def show_table(df):
         values = []
 
         for value in row:
-            if isinstance(value, float):
-                values.append(round(value, 5))
+            if isinstance(value, (float, np.floating)):
+                values.append(round(float(value), 6))
             else:
                 values.append(value)
 
@@ -130,55 +142,30 @@ def fit_loaded_csv():
         return
 
     try:
-        result = fit_equal_mu(observed_data, mu_grid, simulate)
-        best = result.iloc[0]
-
-        result_label.config(
-            text=(
-                f"Результат подбора equal μ: "
-                f"mu_AB = {best['mu_AB']:.5f}, "
-                f"mu_BA = {best['mu_BA']:.5f}, "
-                f"distance = {best['distance']:.5f}"
-            )
-        )
-
-        status_label.config(text="Подбор equal μ выполнен.")
-        show_table(result)
-
-    except Exception as error:
-        messagebox.showerror("Ошибка", f"Не удалось подобрать параметры:\n{error}")
-
-    mu_grid = get_mu_grid()
-
-    if mu_grid is None:
-        return
-
-    try:
         equal = fit_equal_mu_refined(
-                    observed_data,
-                    mu_grid,
-                    simulate,
-                    top_k=3,
-                    refine_steps=4,
-                    refine_points=15,
-                    shrink=0.35,
-                    seeds=(0, 1, 2),
-                )
-        unequal = fit_unequal_mu(observed_data, mu_grid, simulate)
+            observed_data,
+            mu_grid,
+            simulate,
+            top_k=3,
+            refine_steps=4,
+            refine_points=15,
+            shrink=0.35,
+            seeds=(0, 1, 2),
+        )
 
         best_equal = equal.iloc[0]
-        best_unequal = unequal.iloc[0]
 
         result_label.config(
             text=(
-                f"Лучшие unequal: mu_AB = {best_unequal['mu_AB']:.5f}, "
-                f"mu_BA = {best_unequal['mu_BA']:.5f}, "
-                f"distance = {best_unequal['distance']:.5f}. "
-                f"Лучшие equal: mu = {best_equal['mu_AB']:.5f}"
+                f"Лучший refined equal подбор: "
+                f"mu = {best_equal['mu_AB']:.6f}, "
+                f"distance = {best_equal['distance']:.6f}, "
+                f"stage = {int(best_equal['stage'])}"
             )
         )
 
-        show_table(unequal)
+        status_label.config(text="Refined equal подбор выполнен.")
+        show_table(equal)
 
     except Exception as error:
         messagebox.showerror("Ошибка", f"Не удалось подобрать параметры:\n{error}")
@@ -199,7 +186,7 @@ def run_simulation():
         last_simulation_df = pd.DataFrame([sim])
 
         result_label.config(
-            text=f"Симуляция готова: mu_AB = {mu_ab:.5f}, mu_BA = {mu_ba:.5f}"
+            text=f"Симуляция готова: mu_AB = {mu_ab:.6f}, mu_BA = {mu_ba:.6f}"
         )
 
         status_label.config(text="Симуляция выполнена.")
@@ -251,15 +238,16 @@ def simulate_and_fit():
         last_simulation_df = pd.DataFrame([obs])
 
         equal = fit_equal_mu_refined(
-                    observed_data,
-                    mu_grid,
-                    simulate,
-                    top_k=3,
-                    refine_steps=4,
-                    refine_points=15,
-                    shrink=0.35,
-                    seeds=(0, 1, 2),
-                )
+            obs,
+            mu_grid,
+            simulate,
+            top_k=3,
+            refine_steps=4,
+            refine_points=15,
+            shrink=0.35,
+            seeds=(0, 1, 2),
+        )
+
         unequal = fit_unequal_mu(obs, mu_grid, simulate)
 
         best_equal = equal.iloc[0]
@@ -267,16 +255,17 @@ def simulate_and_fit():
 
         result_label.config(
             text=(
-                f"Истинные: mu_AB = {mu_ab:.5f}, mu_BA = {mu_ba:.5f}. "
-                f"Найденные unequal: mu_AB = {best_unequal['mu_AB']:.5f}, "
-                f"mu_BA = {best_unequal['mu_BA']:.5f}, "
-                f"distance = {best_unequal['distance']:.5f}. "
-                f"Лучшие equal: mu = {best_equal['mu_AB']:.5f}"
+                f"Истинные: mu_AB = {mu_ab:.6f}, mu_BA = {mu_ba:.6f}. "
+                f"Refined equal: mu = {best_equal['mu_AB']:.6f}, "
+                f"distance = {best_equal['distance']:.6f}. "
+                f"Unequal grid: mu_AB = {best_unequal['mu_AB']:.6f}, "
+                f"mu_BA = {best_unequal['mu_BA']:.6f}, "
+                f"distance = {best_unequal['distance']:.6f}"
             )
         )
 
         status_label.config(text="Симуляция и подбор выполнены.")
-        show_table(unequal)
+        show_table(equal)
 
     except Exception as error:
         messagebox.showerror("Ошибка", f"Не удалось выполнить симуляцию и подбор:\n{error}")
