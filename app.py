@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk, font as tkfont
 
 import numpy as np
 import pandas as pd
@@ -92,8 +92,10 @@ def show_table(df):
     for _, row in df.iterrows():
         values = []
 
-        for value in row:
-            if isinstance(value, (float, np.floating)):
+        for col, value in row.items():
+            if col == "stage":
+                values.append(int(value))
+            elif isinstance(value, (float, np.floating)):
                 values.append(round(float(value), 6))
             else:
                 values.append(value)
@@ -277,16 +279,43 @@ last_simulation_df = None
 
 root = tk.Tk()
 root.title("VGsim Predict")
-root.geometry("1100x700")
-root.option_add("*Font", "{DejaVu Sans} 11")
+root.geometry("1200x760")
+
+available_fonts = set(tkfont.families())
+
+if "Noto Sans" in available_fonts:
+    font_family = "Noto Sans"
+elif "DejaVu Sans" in available_fonts:
+    font_family = "DejaVu Sans"
+elif "Liberation Sans" in available_fonts:
+    font_family = "Liberation Sans"
+else:
+    font_family = "Arial"
+
+for font_name in (
+    "TkDefaultFont",
+    "TkTextFont",
+    "TkMenuFont",
+    "TkHeadingFont",
+    "TkCaptionFont",
+    "TkSmallCaptionFont",
+    "TkIconFont",
+    "TkTooltipFont",
+):
+    try:
+        tkfont.nametofont(font_name).configure(family=font_family, size=11)
+    except tk.TclError:
+        pass
 
 
 style = ttk.Style()
 style.theme_use("clam")
 
-style.configure("TButton", padding=6)
-style.configure("TLabel", padding=3)
-style.configure("TLabelframe.Label", font=("DejaVu Sans", 11, "bold"))
+style.configure("TButton", padding=6, font=(font_family, 11))
+style.configure("TLabel", padding=3, font=(font_family, 11))
+style.configure("TLabelframe.Label", font=(font_family, 11, "bold"))
+style.configure("Treeview", font=(font_family, 10), rowheight=26)
+style.configure("Treeview.Heading", font=(font_family, 10, "bold"))
 
 
 settings_frame = ttk.LabelFrame(root, text="Настройки сетки")
@@ -369,7 +398,14 @@ ttk.Button(
 status_label = ttk.Label(root, text="Готово.", anchor="w")
 status_label.pack(fill="x", padx=10, pady=5)
 
-result_label = ttk.Label(root, text="", anchor="w", font=("DejaVu Sans", 11, "bold"))
+result_label = ttk.Label(
+    root,
+    text="",
+    anchor="w",
+    font=(font_family, 11, "bold"),
+    wraplength=1150,
+    justify="left",
+)
 result_label.pack(fill="x", padx=10, pady=5)
 
 
