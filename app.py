@@ -8,6 +8,12 @@ from abc_fit import SUMMARY_COLS, fit_equal_mu, fit_unequal_mu
 
 
 def simulate(mu_ab, mu_ba, seed=0):
+    """
+    Пока это простая toy-симуляция.
+
+    Потом сюда вставим настоящий запуск VGsim.
+    """
+
     rng = np.random.default_rng(seed)
 
     mig_ab = int(rng.poisson(500 * mu_ab))
@@ -26,10 +32,38 @@ def simulate(mu_ab, mu_ba, seed=0):
 
 
 def get_mu_grid():
-    mu_min = float(mu_min_entry.get())
-    mu_max = float(mu_max_entry.get())
-    steps = int(steps_entry.get())
-    return np.linspace(mu_min, mu_max, steps)
+    try:
+        mu_min = float(mu_min_entry.get())
+        mu_max = float(mu_max_entry.get())
+        steps = int(steps_entry.get())
+
+        if steps < 2:
+            raise ValueError
+
+        return np.linspace(mu_min, mu_max, steps)
+
+    except ValueError:
+        messagebox.showerror(
+            "Ошибка",
+            "Проверь настройки сетки: min mu, max mu и steps."
+        )
+        return None
+
+
+def get_simulation_params():
+    try:
+        mu_ab = float(mu_ab_entry.get())
+        mu_ba = float(mu_ba_entry.get())
+        seed = int(seed_entry.get())
+
+        return mu_ab, mu_ba, seed
+
+    except ValueError:
+        messagebox.showerror(
+            "Ошибка",
+            "Проверь параметры симуляции: mu_AB, mu_BA и seed."
+        )
+        return None
 
 
 def show_table(df):
@@ -41,7 +75,7 @@ def show_table(df):
 
     for col in df.columns:
         table.heading(col, text=col)
-        table.column(col, width=110)
+        table.column(col, width=120, anchor="center")
 
     for _, row in df.iterrows():
         values = []
@@ -66,18 +100,23 @@ def load_csv():
     if not path:
         return
 
-    df = pd.read_csv(path)
+    try:
+        df = pd.read_csv(path)
 
-    missing = [col for col in SUMMARY_COLS if col not in df.columns]
+        missing = [col for col in SUMMARY_COLS if col not in df.columns]
 
-    if missing:
-        messagebox.showerror("Ошибка", f"В файле нет колонок: {missing}")
-        return
+        if missing:
+            messagebox.showerror("Ошибка", f"В файле нет колонок: {missing}")
+            return
 
-    observed_data = df.iloc[0][SUMMARY_COLS].astype(float).to_dict()
+        observed_data = df.iloc[0][SUMMARY_COLS].astype(float).to_dict()
 
-    status_label.config(text=f"Загружен файл: {path}")
-    show_table(df)
+        status_label.config(text=f"Загружен файл: {path}")
+        result_label.config(text="CSV загружен. Теперь можно нажать 'Подобрать по CSV'.")
+        show_table(df)
+
+    except Exception as error:
+        messagebox.showerror("Ошибка", f"Не удалось прочитать CSV:\n{error}")
 
 
 def fit_loaded_csv():
@@ -87,38 +126,54 @@ def fit_loaded_csv():
 
     mu_grid = get_mu_grid()
 
-    equal = fit_equal_mu(observed_data, mu_grid, simulate)
-    unequal = fit_unequal_mu(observed_data, mu_grid, simulate)
+    if mu_grid is None:
+        return
 
-    best = unequal.iloc[0]
+    try:
+        equal = fit_equal_mu(observed_data, mu_grid, simulate)
+        unequal = fit_unequal_mu(observed_data, mu_grid, simulate)
 
-    result_label.config(
-        text=(
-            f"Лучшие параметры: "
-            f"mu_AB = {best['mu_AB']:.5f}, "
-            f"mu_BA = {best['mu_BA']:.5f}, "
-            f"distance = {best['distance']:.5f}"
+        best_equal = equal.iloc[0]
+        best_unequal = unequal.iloc[0]
+
+        result_label.config(
+            text=(
+                f"Лучшие unequal: mu_AB = {best_unequal['mu_AB']:.5f}, "
+                f"mu_BA = {best_unequal['mu_BA']:.5f}, "
+                f"distance = {best_unequal['distance']:.5f}. "
+                f"Лучшие equal: mu = {best_equal['mu_AB']:.5f}"
+            )
         )
-    )
 
-    show_table(unequal)
+        show_table(unequal)
+
+    except Exception as error:
+        messagebox.showerror("Ошибка", f"Не удалось подобрать параметры:\n{error}")
 
 
 def run_simulation():
     global last_simulation_df
 
-    mu_ab = float(mu_ab_entry.get())
-    mu_ba = float(mu_ba_entry.get())
-    seed = int(seed_entry.get())
+    params = get_simulation_params()
 
-    sim = simulate(mu_ab, mu_ba, seed)
-    last_simulation_df = pd.DataFrame([sim])
+    if params is None:
+        return
 
-    result_label.config(
-        text=f"Симуляция готова: mu_AB = {mu_ab:.5f}, mu_BA = {mu_ba:.5f}"
-    )
+    mu_ab, mu_ba, seed = params
 
-    show_table(last_simulation_df)
+    try:
+        sim = simulate(mu_ab, mu_ba, seed)
+        last_simulation_df = pd.DataFrame([sim])
+
+        result_label.config(
+            text=f"Симуляция готова: mu_AB = {mu_ab:.5f}, mu_BA = {mu_ba:.5f}"
+        )
+
+        status_label.config(text="Симуляция выполнена.")
+        show_table(last_simulation_df)
+
+    except Exception as error:
+        messagebox.showerror("Ошибка", f"Не удалось выполнить симуляцию:\n{error}")
 
 
 def save_simulation_csv():
@@ -135,37 +190,54 @@ def save_simulation_csv():
     if not path:
         return
 
-    last_simulation_df.to_csv(path, index=False)
-    status_label.config(text=f"CSV сохранён: {path}")
+    try:
+        last_simulation_df.to_csv(path, index=False)
+        status_label.config(text=f"CSV сохранён: {path}")
+
+    except Exception as error:
+        messagebox.showerror("Ошибка", f"Не удалось сохранить CSV:\n{error}")
 
 
 def simulate_and_fit():
     global last_simulation_df
 
-    mu_ab = float(mu_ab_entry.get())
-    mu_ba = float(mu_ba_entry.get())
-    seed = int(seed_entry.get())
+    params = get_simulation_params()
 
-    obs = simulate(mu_ab, mu_ba, seed)
-    last_simulation_df = pd.DataFrame([obs])
+    if params is None:
+        return
 
     mu_grid = get_mu_grid()
 
-    equal = fit_equal_mu(obs, mu_grid, simulate)
-    unequal = fit_unequal_mu(obs, mu_grid, simulate)
+    if mu_grid is None:
+        return
 
-    best = unequal.iloc[0]
+    mu_ab, mu_ba, seed = params
 
-    result_label.config(
-        text=(
-            f"Истинные: mu_AB = {mu_ab:.5f}, mu_BA = {mu_ba:.5f}. "
-            f"Найденные: mu_AB = {best['mu_AB']:.5f}, "
-            f"mu_BA = {best['mu_BA']:.5f}, "
-            f"distance = {best['distance']:.5f}"
+    try:
+        obs = simulate(mu_ab, mu_ba, seed)
+        last_simulation_df = pd.DataFrame([obs])
+
+        equal = fit_equal_mu(obs, mu_grid, simulate)
+        unequal = fit_unequal_mu(obs, mu_grid, simulate)
+
+        best_equal = equal.iloc[0]
+        best_unequal = unequal.iloc[0]
+
+        result_label.config(
+            text=(
+                f"Истинные: mu_AB = {mu_ab:.5f}, mu_BA = {mu_ba:.5f}. "
+                f"Найденные unequal: mu_AB = {best_unequal['mu_AB']:.5f}, "
+                f"mu_BA = {best_unequal['mu_BA']:.5f}, "
+                f"distance = {best_unequal['distance']:.5f}. "
+                f"Лучшие equal: mu = {best_equal['mu_AB']:.5f}"
+            )
         )
-    )
 
-    show_table(unequal)
+        status_label.config(text="Симуляция и подбор выполнены.")
+        show_table(unequal)
+
+    except Exception as error:
+        messagebox.showerror("Ошибка", f"Не удалось выполнить симуляцию и подбор:\n{error}")
 
 
 observed_data = None
@@ -174,76 +246,121 @@ last_simulation_df = None
 
 root = tk.Tk()
 root.title("VGsim Predict")
-root.geometry("1050x650")
+root.geometry("1100x700")
+root.option_add("*Font", "{DejaVu Sans} 11")
 
 
-settings_frame = tk.LabelFrame(root, text="Настройки сетки")
-settings_frame.pack(fill="x", padx=10, pady=5)
+style = ttk.Style()
+style.theme_use("clam")
 
-tk.Label(settings_frame, text="min mu").grid(row=0, column=0, padx=5, pady=5)
-mu_min_entry = tk.Entry(settings_frame, width=10)
+style.configure("TButton", padding=6)
+style.configure("TLabel", padding=3)
+style.configure("TLabelframe.Label", font=("DejaVu Sans", 11, "bold"))
+
+
+settings_frame = ttk.LabelFrame(root, text="Настройки сетки")
+settings_frame.pack(fill="x", padx=10, pady=6)
+
+ttk.Label(settings_frame, text="min mu").grid(row=0, column=0, padx=5, pady=5)
+mu_min_entry = ttk.Entry(settings_frame, width=12)
 mu_min_entry.insert(0, "0.001")
 mu_min_entry.grid(row=0, column=1, padx=5, pady=5)
 
-tk.Label(settings_frame, text="max mu").grid(row=0, column=2, padx=5, pady=5)
-mu_max_entry = tk.Entry(settings_frame, width=10)
+ttk.Label(settings_frame, text="max mu").grid(row=0, column=2, padx=5, pady=5)
+mu_max_entry = ttk.Entry(settings_frame, width=12)
 mu_max_entry.insert(0, "0.050")
 mu_max_entry.grid(row=0, column=3, padx=5, pady=5)
 
-tk.Label(settings_frame, text="steps").grid(row=0, column=4, padx=5, pady=5)
-steps_entry = tk.Entry(settings_frame, width=10)
+ttk.Label(settings_frame, text="steps").grid(row=0, column=4, padx=5, pady=5)
+steps_entry = ttk.Entry(settings_frame, width=12)
 steps_entry.insert(0, "10")
 steps_entry.grid(row=0, column=5, padx=5, pady=5)
 
 
-params_frame = tk.LabelFrame(root, text="Параметры симуляции")
-params_frame.pack(fill="x", padx=10, pady=5)
+params_frame = ttk.LabelFrame(root, text="Параметры симуляции")
+params_frame.pack(fill="x", padx=10, pady=6)
 
-tk.Label(params_frame, text="mu_AB").grid(row=0, column=0, padx=5, pady=5)
-mu_ab_entry = tk.Entry(params_frame, width=10)
+ttk.Label(params_frame, text="mu_AB").grid(row=0, column=0, padx=5, pady=5)
+mu_ab_entry = ttk.Entry(params_frame, width=12)
 mu_ab_entry.insert(0, "0.020")
 mu_ab_entry.grid(row=0, column=1, padx=5, pady=5)
 
-tk.Label(params_frame, text="mu_BA").grid(row=0, column=2, padx=5, pady=5)
-mu_ba_entry = tk.Entry(params_frame, width=10)
+ttk.Label(params_frame, text="mu_BA").grid(row=0, column=2, padx=5, pady=5)
+mu_ba_entry = ttk.Entry(params_frame, width=12)
 mu_ba_entry.insert(0, "0.050")
 mu_ba_entry.grid(row=0, column=3, padx=5, pady=5)
 
-tk.Label(params_frame, text="seed").grid(row=0, column=4, padx=5, pady=5)
-seed_entry = tk.Entry(params_frame, width=10)
+ttk.Label(params_frame, text="seed").grid(row=0, column=4, padx=5, pady=5)
+seed_entry = ttk.Entry(params_frame, width=12)
 seed_entry.insert(0, "0")
 seed_entry.grid(row=0, column=5, padx=5, pady=5)
 
 
-buttons_frame = tk.LabelFrame(root, text="Действия")
-buttons_frame.pack(fill="x", padx=10, pady=5)
+buttons_frame = ttk.LabelFrame(root, text="Действия")
+buttons_frame.pack(fill="x", padx=10, pady=6)
 
-tk.Button(buttons_frame, text="Загрузить CSV", command=load_csv, width=25).grid(row=0, column=0, padx=5, pady=5)
-tk.Button(buttons_frame, text="Подобрать по CSV", command=fit_loaded_csv, width=25).grid(row=0, column=1, padx=5, pady=5)
+ttk.Button(
+    buttons_frame,
+    text="Загрузить CSV",
+    command=load_csv,
+    width=26
+).grid(row=0, column=0, padx=5, pady=5)
 
-tk.Button(buttons_frame, text="Засимулировать", command=run_simulation, width=25).grid(row=1, column=0, padx=5, pady=5)
-tk.Button(buttons_frame, text="Сохранить CSV", command=save_simulation_csv, width=25).grid(row=1, column=1, padx=5, pady=5)
+ttk.Button(
+    buttons_frame,
+    text="Подобрать по CSV",
+    command=fit_loaded_csv,
+    width=26
+).grid(row=0, column=1, padx=5, pady=5)
 
-tk.Button(buttons_frame, text="Засимулировать + подобрать", command=simulate_and_fit, width=25).grid(row=2, column=0, columnspan=2, padx=5, pady=5)
+ttk.Button(
+    buttons_frame,
+    text="Засимулировать",
+    command=run_simulation,
+    width=26
+).grid(row=1, column=0, padx=5, pady=5)
+
+ttk.Button(
+    buttons_frame,
+    text="Сохранить CSV",
+    command=save_simulation_csv,
+    width=26
+).grid(row=1, column=1, padx=5, pady=5)
+
+ttk.Button(
+    buttons_frame,
+    text="Засимулировать + подобрать",
+    command=simulate_and_fit,
+    width=56
+).grid(row=2, column=0, columnspan=2, padx=5, pady=5)
 
 
-status_label = tk.Label(root, text="Готово.", anchor="w")
+status_label = ttk.Label(root, text="Готово.", anchor="w")
 status_label.pack(fill="x", padx=10, pady=5)
 
-result_label = tk.Label(root, text="", anchor="w", font=("Arial", 11, "bold"))
+result_label = ttk.Label(root, text="", anchor="w", font=("DejaVu Sans", 11, "bold"))
 result_label.pack(fill="x", padx=10, pady=5)
 
 
-table_frame = tk.Frame(root)
+table_frame = ttk.Frame(root)
 table_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
 table = ttk.Treeview(table_frame)
-table.pack(side="left", fill="both", expand=True)
+table.grid(row=0, column=0, sticky="nsew")
 
 scrollbar_y = ttk.Scrollbar(table_frame, orient="vertical", command=table.yview)
-scrollbar_y.pack(side="right", fill="y")
+scrollbar_y.grid(row=0, column=1, sticky="ns")
 
-table.configure(yscrollcommand=scrollbar_y.set)
+scrollbar_x = ttk.Scrollbar(table_frame, orient="horizontal", command=table.xview)
+scrollbar_x.grid(row=1, column=0, sticky="ew")
+
+table.configure(
+    yscrollcommand=scrollbar_y.set,
+    xscrollcommand=scrollbar_x.set,
+)
+
+table_frame.rowconfigure(0, weight=1)
+table_frame.columnconfigure(0, weight=1)
 
 
 root.mainloop()
