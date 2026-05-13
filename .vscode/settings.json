@@ -1,0 +1,7 @@
+{
+    "python.defaultInterpreterPath": "/home/nikita/miniconda3/envs/conda_vgsim/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python.analysis.extraPaths": [
+        "/home/nikita/miniconda3/envs/conda_vgsim/lib/python3.9/site-packages"
+    ]
+}
