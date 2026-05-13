@@ -71,3 +71,10 @@ target/
 cythonize.dat
 
 .DS_Store
+
+# Local VGsim outputs
+toy_output/
+outputs/
+*.npy
+*.nwk
+*.tsv
