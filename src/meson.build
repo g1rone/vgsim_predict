@@ -30,8 +30,8 @@ python_sources = [
     '__init__.py',
     'IO.py',
     '_interface.py',
+    'predictors.py',
 ]
-
 # install source files in current dir
 py3.install_sources(
     python_sources,

@@ -4,7 +4,7 @@ from tkinter import filedialog, messagebox, ttk
 import numpy as np
 import pandas as pd
 
-from abc_fit import SUMMARY_COLS, fit_equal_mu, fit_unequal_mu
+from abc_fit import SUMMARY_COLS, fit_equal_mu, fit_equal_mu_refined, fit_unequal_mu
 
 
 def simulate(mu_ab, mu_ba, seed=0):
@@ -130,7 +130,40 @@ def fit_loaded_csv():
         return
 
     try:
-        equal = fit_equal_mu(observed_data, mu_grid, simulate)
+        result = fit_equal_mu(observed_data, mu_grid, simulate)
+        best = result.iloc[0]
+
+        result_label.config(
+            text=(
+                f"Результат подбора equal μ: "
+                f"mu_AB = {best['mu_AB']:.5f}, "
+                f"mu_BA = {best['mu_BA']:.5f}, "
+                f"distance = {best['distance']:.5f}"
+            )
+        )
+
+        status_label.config(text="Подбор equal μ выполнен.")
+        show_table(result)
+
+    except Exception as error:
+        messagebox.showerror("Ошибка", f"Не удалось подобрать параметры:\n{error}")
+
+    mu_grid = get_mu_grid()
+
+    if mu_grid is None:
+        return
+
+    try:
+        equal = fit_equal_mu_refined(
+                    observed_data,
+                    mu_grid,
+                    simulate,
+                    top_k=3,
+                    refine_steps=4,
+                    refine_points=15,
+                    shrink=0.35,
+                    seeds=(0, 1, 2),
+                )
         unequal = fit_unequal_mu(observed_data, mu_grid, simulate)
 
         best_equal = equal.iloc[0]
@@ -217,7 +250,16 @@ def simulate_and_fit():
         obs = simulate(mu_ab, mu_ba, seed)
         last_simulation_df = pd.DataFrame([obs])
 
-        equal = fit_equal_mu(obs, mu_grid, simulate)
+        equal = fit_equal_mu_refined(
+                    observed_data,
+                    mu_grid,
+                    simulate,
+                    top_k=3,
+                    refine_steps=4,
+                    refine_points=15,
+                    shrink=0.35,
+                    seeds=(0, 1, 2),
+                )
         unequal = fit_unequal_mu(obs, mu_grid, simulate)
 
         best_equal = equal.iloc[0]
