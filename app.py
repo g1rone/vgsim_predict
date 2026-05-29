@@ -1352,7 +1352,7 @@ style.configure("Treeview", rowheight=24)
 settings_frame = ttk.LabelFrame(root, text="Сетка поиска mu")
 settings_frame.pack(fill="x", padx=10, pady=5)
 
-mu_min_entry = _make_entry(settings_frame, 0, 0, "min mu", "0.001")
+mu_min_entry = _make_entry(settings_frame, 0, 0, "min mu", "0.000")
 mu_max_entry = _make_entry(settings_frame, 0, 2, "max mu", "0.300")
 steps_entry = _make_entry(settings_frame, 0, 4, "steps", "10")
 
