@@ -49,6 +49,7 @@ DIAGNOSTIC_COLS = MIGRATION_COLS + [
 ]
 
 DISPLAY_FIRST_COLS = [
+    "stage_type",
     "stage",
     "mu",
     "mu_AB_candidate",
@@ -65,7 +66,7 @@ DISPLAY_FIRST_COLS = [
 ]
 
 
-def make_trajectory_cols(trajectory_points=DEFAULT_TRAJECTORY_POINTS):
+def фtrajectory_cols(trajectory_points=DEFAULT_TRAJECTORY_POINTS):
     trajectory_points = int(trajectory_points)
 
     if trajectory_points < 2:
@@ -438,7 +439,6 @@ def fit_equal_mu_refined(
 
     return result
 
-
 def _unique_sorted_pairs(pairs, decimals=12):
     return np.array(
         sorted(
@@ -602,5 +602,188 @@ def fit_unequal_mu_refined(
 
     result = pd.concat(all_rows, ignore_index=True)
     result = result.sort_values("distance").reset_index(drop=True)
+
+    return result
+
+
+def _evaluate_mu_pair(
+    obs,
+    mu_ab,
+    mu_ba,
+    simulate_func,
+    seeds,
+    trajectory_points,
+    trajectory_weight,
+    aggregate_weight,
+    time_weight,
+    time_extra_weight,
+    time_tolerance,
+    migration_weight,
+    stage,
+    stage_type,
+    grid_size,
+    search_radius,
+    search_radius_ab=None,
+    search_radius_ba=None,
+):
+    simulations = []
+
+    for seed in seeds:
+        sim = simulate_func(float(mu_ab), float(mu_ba), seed=int(seed))
+        simulations.append(sim)
+
+    mean_sim = _mean_simulation_result(simulations)
+    dist_info = distance_components(
+        sim=mean_sim,
+        obs=obs,
+        trajectory_points=trajectory_points,
+        trajectory_weight=trajectory_weight,
+        aggregate_weight=aggregate_weight,
+        time_weight=time_weight,
+        time_extra_weight=time_extra_weight,
+        time_tolerance=time_tolerance,
+        migration_weight=migration_weight,
+    )
+
+    row = {
+        "stage_type": str(stage_type),
+        "stage": int(stage),
+        "mu": float((float(mu_ab) + float(mu_ba)) / 2.0),
+        "mu_AB_candidate": float(mu_ab),
+        "mu_BA_candidate": float(mu_ba),
+        "distance": dist_info["distance"],
+        "trajectory_distance": dist_info["trajectory_distance"],
+        "aggregate_distance": dist_info["aggregate_distance"],
+        "time_distance": dist_info["time_distance"],
+        "time_extra_distance": dist_info["time_extra_distance"],
+        "migration_distance": dist_info["migration_distance"],
+        "grid_size": int(grid_size),
+        "search_radius": float(search_radius),
+        "n_seeds": int(len(seeds)),
+        **mean_sim,
+    }
+
+    if search_radius_ab is not None:
+        row["search_radius_AB"] = float(search_radius_ab)
+    if search_radius_ba is not None:
+        row["search_radius_BA"] = float(search_radius_ba)
+
+    return row
+
+
+def fit_unequal_mu_fast_refined(
+    obs,
+    mu_ab_grid,
+    mu_ba_grid,
+    simulate_func,
+    top_k=3,
+    refine_steps=2,
+    refine_points=5,
+    shrink=0.35,
+    seeds=(1, 2, 3),
+    rerank_top=None,
+    trajectory_points=DEFAULT_TRAJECTORY_POINTS,
+    trajectory_weight=1.0,
+    aggregate_weight=0.75,
+    time_weight=1.0,
+    time_extra_weight=3.0,
+    time_tolerance=0.10,
+    migration_weight=0.0,
+    progress_callback=None,
+):
+    seeds = _parse_seeds(seeds)
+    trajectory_points = int(trajectory_points)
+
+    if len(seeds) == 0:
+        raise ValueError("seeds must contain at least one seed")
+
+    if rerank_top is None:
+        rerank_top = max(15, int(top_k) * int(refine_points))
+
+    rerank_top = int(rerank_top)
+
+    if rerank_top < 1:
+        raise ValueError("rerank_top must be positive")
+
+    def rough_progress(stage, max_stage, index, grid_size, mu_ab, mu_ba):
+        if progress_callback is not None:
+            progress_callback("rough", stage, max_stage, index, grid_size, mu_ab, mu_ba)
+
+    rough_result = fit_unequal_mu_refined(
+        obs=obs,
+        mu_ab_grid=mu_ab_grid,
+        mu_ba_grid=mu_ba_grid,
+        simulate_func=simulate_func,
+        top_k=top_k,
+        refine_steps=refine_steps,
+        refine_points=refine_points,
+        shrink=shrink,
+        seeds=(seeds[0],),
+        trajectory_points=trajectory_points,
+        trajectory_weight=trajectory_weight,
+        aggregate_weight=aggregate_weight,
+        time_weight=time_weight,
+        time_extra_weight=time_extra_weight,
+        time_tolerance=time_tolerance,
+        migration_weight=migration_weight,
+        progress_callback=rough_progress,
+    )
+
+    rough_result = rough_result.copy()
+    rough_result["stage_type"] = "rough"
+
+    candidate_pairs = (
+        rough_result[["mu_AB_candidate", "mu_BA_candidate"]]
+        .drop_duplicates()
+        .head(rerank_top)
+        .to_numpy(dtype=float)
+    )
+
+    rows = []
+    grid_size = len(candidate_pairs)
+
+    for index, pair in enumerate(candidate_pairs, start=1):
+        mu_ab = float(pair[0])
+        mu_ba = float(pair[1])
+
+        if progress_callback is not None:
+            progress_callback(
+                "rerank",
+                int(refine_steps) + 1,
+                int(refine_steps) + 1,
+                index,
+                grid_size,
+                mu_ab,
+                mu_ba,
+            )
+
+        rows.append(
+            _evaluate_mu_pair(
+                obs=obs,
+                mu_ab=mu_ab,
+                mu_ba=mu_ba,
+                simulate_func=simulate_func,
+                seeds=seeds,
+                trajectory_points=trajectory_points,
+                trajectory_weight=trajectory_weight,
+                aggregate_weight=aggregate_weight,
+                time_weight=time_weight,
+                time_extra_weight=time_extra_weight,
+                time_tolerance=time_tolerance,
+                migration_weight=migration_weight,
+                stage=int(refine_steps) + 1,
+                stage_type="rerank",
+                grid_size=grid_size,
+                search_radius=0.0,
+                search_radius_ab=0.0,
+                search_radius_ba=0.0,
+            )
+        )
+
+    rerank_result = pd.DataFrame(rows).sort_values("distance").reset_index(drop=True)
+    rough_result = rough_result.sort_values("distance").reset_index(drop=True)
+    result = pd.concat([rerank_result, rough_result], ignore_index=True)
+    result["stage_type_rank"] = result["stage_type"].map({"rerank": 0, "rough": 1}).fillna(2)
+    result = result.sort_values(["stage_type_rank", "distance"]).drop(columns=["stage_type_rank"]).reset_index(drop=True)
 
     return result

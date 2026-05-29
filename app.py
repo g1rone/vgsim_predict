@@ -15,6 +15,7 @@ from abc_fit import (
     distance_components,
     fit_equal_mu_refined,
     fit_unequal_mu_refined,
+    fit_unequal_mu_fast_refined,
 )
 
 
@@ -67,9 +68,6 @@ state = {
     "last_fit_df": None,
     "last_posterior_df": None,
     "best_fit_mu": None,
-    "best_fit_mu_ab": None,
-    "best_fit_mu_ba": None,
-    "best_fit_kind": None,
     "best_fit_seed": None,
 }
 
@@ -97,9 +95,6 @@ def clear_fit_outputs():
     state["last_fit_df"] = None
     state["last_posterior_df"] = None
     state["best_fit_mu"] = None
-    state["best_fit_mu_ab"] = None
-    state["best_fit_mu_ba"] = None
-    state["best_fit_kind"] = None
     state["best_fit_seed"] = None
 
 
@@ -851,7 +846,7 @@ def show_table(df):
         table.insert("", "end", values=values)
 
 
-def _plot_active_timeline(timeline, title, output_path, clean_timeline=None):
+def _plot_active_timeline(timeline, title, output_path, clean_timeline=None, fit_timeline=None):
     if timeline is None:
         warn("Нет графика", "Сначала создай нужную симуляцию.")
         return
@@ -864,8 +859,8 @@ def _plot_active_timeline(timeline, title, output_path, clean_timeline=None):
             clean_timeline["active"][:, POP_A],
             where="post",
             color="red",
-            alpha=1,
-            linewidth=2,
+            alpha=0.95,
+            linewidth=2.4,
             label="A true",
         )
         plt.step(
@@ -873,29 +868,54 @@ def _plot_active_timeline(timeline, title, output_path, clean_timeline=None):
             clean_timeline["active"][:, POP_B],
             where="post",
             color="blue",
-            alpha=1,
-            linewidth=2,
+            alpha=0.95,
+            linewidth=2.4,
             label="B true",
         )
+
+    observed_alpha = 1.0 if clean_timeline is None else 0.55
+    observed_width = 2.6 if clean_timeline is None else 2.0
 
     plt.step(
         timeline["time"],
         timeline["active"][:, POP_A],
         where="post",
         color="darkred",
-        linewidth=2,
+        linewidth=observed_width,
         label="A observed",
-        alpha=0.25
+        alpha=observed_alpha,
     )
     plt.step(
         timeline["time"],
         timeline["active"][:, POP_B],
         where="post",
         color="navy",
-        linewidth=2,
+        linewidth=observed_width,
         label="B observed",
-        alpha=0.25
+        alpha=observed_alpha,
     )
+
+    if fit_timeline is not None:
+        plt.step(
+            fit_timeline["time"],
+            fit_timeline["active"][:, POP_A],
+            where="post",
+            color="black",
+            linestyle="--",
+            linewidth=2.0,
+            label="A fit",
+            alpha=0.9,
+        )
+        plt.step(
+            fit_timeline["time"],
+            fit_timeline["active"][:, POP_B],
+            where="post",
+            color="gray",
+            linestyle="--",
+            linewidth=2.0,
+            label="B fit",
+            alpha=0.9,
+        )
 
     plt.xlabel("Время")
     plt.ylabel("Активные заражённые")
@@ -905,7 +925,6 @@ def _plot_active_timeline(timeline, title, output_path, clean_timeline=None):
     plt.tight_layout()
     plt.savefig(output_path, dpi=200)
     plt.show()
-
 
 def show_observation_plot():
     clean = state["clean_observed_timeline"] if noise_enabled() else None
@@ -939,7 +958,7 @@ def show_best_fit_plot():
     try:
         update_status("Строим график лучшей подобранной симуляции...")
 
-        _, timeline = simulate(
+        _, fit_timeline = simulate(
             state["best_fit_mu_ab"],
             state["best_fit_mu_ba"],
             seed=state["best_fit_seed"],
@@ -950,21 +969,25 @@ def show_best_fit_plot():
             vgsim_params=state["observation_vgsim_params"],
         )
 
+        clean = state["clean_observed_timeline"] if noise_enabled() else None
         path = PLOTS_DIR / "best_fit_active.png"
         _plot_active_timeline(
-            timeline,
-            f"Лучшая чистая симуляция ({state['best_fit_kind']}): "
-            f"mu_AB = {state['best_fit_mu_ab']:.6f}, "
-            f"mu_BA = {state['best_fit_mu_ba']:.6f}, "
-            f"seed = {state['best_fit_seed']}",
+            state["observed_timeline"],
+            (
+                f"Лучшая чистая симуляция ({state['best_fit_kind']}): "
+                f"mu_AB = {state['best_fit_mu_ab']:.6f}, "
+                f"mu_BA = {state['best_fit_mu_ba']:.6f}, "
+                f"seed = {state['best_fit_seed']}"
+            ),
             path,
+            clean_timeline=clean,
+            fit_timeline=fit_timeline,
         )
-        update_status(f"График лучшей симуляции сохранён: {path}")
+        update_status(f"График сравнения сохранён: {path}")
 
     except Exception as error:
-        fail("Ошибка", f"Не удалось построить график лучшей симуляции:\n{error}")
-        update_status("Ошибка при построении графика.")
-
+        fail("Ошибка", f"Ошибка исполнения:\n{error}")
+        update_status("Ошибка исполнения.")
 
 
 def create_observation():
@@ -1191,16 +1214,100 @@ def fit_unequal_mu():
         fail("Ошибка", f"Не удалось выполнить unequal-fit:\n{error}")
         update_status("Ошибка при unequal-fit.")
 
+
+def fit_unequal_mu_fast():
+    mu_grid = get_mu_grid()
+    distance_params = get_distance_params()
+    fit_params = get_fit_params()
+    vgsim_params = get_vgsim_params()
+
+    if mu_grid is None or distance_params is None or fit_params is None or vgsim_params is None:
+        return
+
+    trajectory_points, grid_start_frac, grid_end_frac = distance_params[:3]
+    grid_signature = (trajectory_points, grid_start_frac, grid_end_frac)
+
+    if not check_observation_compatibility(vgsim_params, grid_signature):
+        return
+
+    top_k, refine_steps, refine_points, shrink, seeds = fit_params
+    rerank_top = max(15, int(top_k) * int(refine_points))
+    reference_t_end = float(state["observed_data"]["t_end"])
+
+    def simulate_candidate(mu_ab, mu_ba, seed=0):
+        return _simulate_candidate_for_distance(
+            mu_ab=mu_ab,
+            mu_ba=mu_ba,
+            seed=seed,
+            distance_params=distance_params,
+            vgsim_params=vgsim_params,
+            reference_t_end=reference_t_end,
+        )
+
+    try:
+        update_status("Запускаем fast unequal-fit через VGsim...")
+
+        result = fit_unequal_mu_fast_refined(
+            obs=state["observed_data"],
+            mu_ab_grid=mu_grid,
+            mu_ba_grid=mu_grid,
+            simulate_func=simulate_candidate,
+            top_k=top_k,
+            refine_steps=refine_steps,
+            refine_points=refine_points,
+            shrink=shrink,
+            seeds=seeds,
+            rerank_top=rerank_top,
+            trajectory_points=trajectory_points,
+            trajectory_weight=distance_params[3],
+            aggregate_weight=distance_params[4],
+            time_weight=distance_params[5],
+            time_extra_weight=distance_params[6],
+            time_tolerance=distance_params[7],
+            migration_weight=distance_params[8],
+            progress_callback=lambda phase, stage, max_stage, index, grid_size, mu_ab, mu_ba: update_status(
+                f"Fast unequal-fit {phase}: stage {stage}/{max_stage}, pair {index}/{grid_size}, "
+                f"mu_AB = {mu_ab:.6f}, mu_BA = {mu_ba:.6f}"
+            ),
+        )
+
+        best = result.iloc[0]
+        state["last_fit_df"] = result
+        state["best_fit_mu"] = float(best["mu"])
+        state["best_fit_mu_ab"] = float(best["mu_AB_candidate"])
+        state["best_fit_mu_ba"] = float(best["mu_BA_candidate"])
+        state["best_fit_kind"] = "unequal fast"
+        state["best_fit_seed"] = int(seeds[0])
+
+        target_label = "шумному наблюдению" if noise_enabled() else "чистому наблюдению"
+
+        result_label.config(
+            text=(
+                f"Лучший fast unequal-fit по {target_label}: "
+                f"mu_AB = {best['mu_AB_candidate']:.6f}, "
+                f"mu_BA = {best['mu_BA_candidate']:.6f}, "
+                f"distance = {best['distance']:.6f}, "
+                f"rerank_top = {rerank_top}, "
+                f"traj/agg/time/textra/mig = "
+                f"{best['trajectory_distance']:.4f}/"
+                f"{best['aggregate_distance']:.4f}/"
+                f"{best['time_distance']:.4f}/"
+                f"{best['time_extra_distance']:.4f}/"
+                f"{best['migration_distance']:.4f}."
+            )
+        )
+
+        update_status("Fast unequal-fit готов.")
+        show_table(result)
+
+    except Exception as error:
+        fail("Ошибка", f"Ошибка исполнения:\n{error}")
+        update_status("Ошибка исполнения.")
+
 def create_observation_and_fit():
     create_observation()
     if state["observed_data"] is not None:
         fit_equal_mu()
-
-
-def create_observation_and_fit_unequal():
-    create_observation()
-    if state["observed_data"] is not None:
-        fit_unequal_mu()
 
 
 def show_abc_posterior_distribution():
@@ -1389,8 +1496,8 @@ ttk.Checkbutton(noise_frame, text="шум", variable=noise_enabled_var).grid(
     sticky="w",
 )
 
-reporting_rate_entry = _make_entry(noise_frame, 0, 3, "reporting rate p", "0.30")
-rate_jitter_entry = _make_entry(noise_frame, 0, 5, "rate jitter", "0.05")
+reporting_rate_entry = _make_entry(noise_frame, 0, 3, "reporting rate p", "0.80")
+rate_jitter_entry = _make_entry(noise_frame, 0, 5, "rate jitter", "0.03")
 noise_seed_entry = _make_entry(noise_frame, 0, 7, "noise seed", "2027")
 
 ttk.Button(noise_frame, text="Применить шум", command=refresh_observation_target, width=28).grid(
@@ -1424,9 +1531,9 @@ fit_frame.pack(fill="x", padx=10, pady=5)
 
 top_k_entry = _make_entry(fit_frame, 0, 0, "top_k", "3")
 refine_steps_entry = _make_entry(fit_frame, 0, 2, "refine_steps", "2")
-refine_points_entry = _make_entry(fit_frame, 0, 4, "refine_points", "7")
+refine_points_entry = _make_entry(fit_frame, 0, 4, "refine_points", "5")
 shrink_entry = _make_entry(fit_frame, 0, 6, "shrink", "0.35")
-fit_seeds_entry = _make_entry(fit_frame, 0, 8, "fit seeds", "1,2,3", width=18)
+fit_seeds_entry = _make_entry(fit_frame, 0, 8, "fit seeds", "1,2,3,4,5", width=18)
 
 posterior_frame = ttk.LabelFrame(root, text="Параметры ABC posterior")
 posterior_frame.pack(fill="x", padx=10, pady=5)
@@ -1441,9 +1548,9 @@ actions_frame.pack(fill="x", padx=10, pady=5)
 
 ttk.Button(actions_frame, text="Просимулировать", command=create_observation, width=34).grid(row=0, column=0, padx=5, pady=4)
 ttk.Button(actions_frame, text="Подобрать equal mu", command=fit_equal_mu, width=34).grid(row=0, column=1, padx=5, pady=4)
-ttk.Button(actions_frame, text="Подобрать unequal mu", command=fit_unequal_mu, width=34).grid(row=0, column=2, padx=5, pady=4)
-ttk.Button(actions_frame, text="Просимулировать + equal", command=create_observation_and_fit, width=34).grid(row=0, column=3, padx=5, pady=4)
-ttk.Button(actions_frame, text="Просимулировать + unequal", command=create_observation_and_fit_unequal, width=34).grid(row=0, column=4, padx=5, pady=4)
+ttk.Button(actions_frame, text="Подобрать unequal mu", command=fit_unequal_mu, width=34).grid(row=0, column=3, padx=5, pady=4)
+ttk.Button(actions_frame, text="Подобрать unequal fast", command=fit_unequal_mu_fast, width=34).grid(row=0, column=4, padx=5, pady=4)
+ttk.Button(actions_frame, text="Просимулировать + equal", command=create_observation_and_fit, width=34).grid(row=0, column=2, padx=5, pady=4)
 ttk.Button(actions_frame, text="Исходный граф", command=show_observation_plot, width=34).grid(row=1, column=0, padx=5, pady=4)
 ttk.Button(actions_frame, text="Подобранный граф", command=show_best_fit_plot, width=34).grid(row=1, column=1, padx=5, pady=4)
 ttk.Button(actions_frame, text="ABC posterior по mu", command=show_abc_posterior_distribution, width=34).grid(row=1, column=2, padx=5, pady=4)
