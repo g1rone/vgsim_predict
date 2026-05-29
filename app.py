@@ -900,21 +900,21 @@ def _plot_active_timeline(timeline, title, output_path, clean_timeline=None, fit
             fit_timeline["time"],
             fit_timeline["active"][:, POP_A],
             where="post",
-            color="black",
+            color="orange",
             linestyle="--",
             linewidth=2.0,
             label="A fit",
-            alpha=0.9,
+            alpha=1,
         )
         plt.step(
             fit_timeline["time"],
             fit_timeline["active"][:, POP_B],
             where="post",
-            color="gray",
+            color="cyan",
             linestyle="--",
             linewidth=2.0,
             label="B fit",
-            alpha=0.9,
+            alpha=1,
         )
 
     plt.xlabel("Время")

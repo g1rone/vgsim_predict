@@ -66,7 +66,7 @@ DISPLAY_FIRST_COLS = [
 ]
 
 
-def фtrajectory_cols(trajectory_points=DEFAULT_TRAJECTORY_POINTS):
+def trajectory_cols(trajectory_points=DEFAULT_TRAJECTORY_POINTS):
     trajectory_points = int(trajectory_points)
 
     if trajectory_points < 2:
@@ -80,6 +80,19 @@ def фtrajectory_cols(trajectory_points=DEFAULT_TRAJECTORY_POINTS):
 
     return cols
 
+def make_trajectory_cols(trajectory_points=DEFAULT_TRAJECTORY_POINTS):
+    trajectory_points = int(trajectory_points)
+
+    if trajectory_points < 2:
+        raise ValueError("trajectory_points must be at least 2")
+
+    cols = []
+
+    for index in range(trajectory_points):
+        for series_name in TRAJECTORY_SERIES:
+            cols.append(f"grid_{index:03d}_{series_name}")
+
+    return cols
 
 def make_summary_cols(trajectory_points=DEFAULT_TRAJECTORY_POINTS):
     return (
