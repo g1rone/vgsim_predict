@@ -68,6 +68,9 @@ state = {
     "last_fit_df": None,
     "last_posterior_df": None,
     "best_fit_mu": None,
+    "best_fit_mu_ab": None,
+    "best_fit_mu_ba": None,
+    "best_fit_kind": None,
     "best_fit_seed": None,
 }
 
@@ -95,6 +98,9 @@ def clear_fit_outputs():
     state["last_fit_df"] = None
     state["last_posterior_df"] = None
     state["best_fit_mu"] = None
+    state["best_fit_mu_ab"] = None
+    state["best_fit_mu_ba"] = None
+    state["best_fit_kind"] = None
     state["best_fit_seed"] = None
 
 

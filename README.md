@@ -211,7 +211,15 @@ migration event weight = 0.0
 python app.py
 ```
 
-Перед запуском должен быть установлен VGsim и зависимости проекта.
+Перед запуском должен быть установлен VGsim и зависимости проекта. Если их нет, то:
+
+## Запуск
+
+```bash
+pip install -r requirements.txt
+pip install .
+python app.py
+```
 
 ## Файлы
 
