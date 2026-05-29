@@ -885,7 +885,7 @@ def _plot_active_timeline(timeline, title, output_path, clean_timeline=None):
         color="darkred",
         linewidth=2,
         label="A observed",
-        alpha=0.25
+        alpha=1
     )
     plt.step(
         timeline["time"],
@@ -894,7 +894,7 @@ def _plot_active_timeline(timeline, title, output_path, clean_timeline=None):
         color="navy",
         linewidth=2,
         label="B observed",
-        alpha=0.25
+        alpha=1
     )
 
     plt.xlabel("Время")
