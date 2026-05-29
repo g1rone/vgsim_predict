@@ -7,7 +7,6 @@ from vgsim_plots import make_epidemic_plots_from_events
 
 
 def main():
-    # 2 популяции: 0 = A, 1 = B
     number_of_sites = 1
     populations_number = 2
     number_of_susceptible_groups = 1
@@ -18,17 +17,13 @@ def main():
         number_of_susceptible_groups,
         seed=42,
     )
-
-    # размеры популяций
     simulator.set_population_size(200_000, population=0)  # A
     simulator.set_population_size(100_000, population=1)  # B
 
-    # эпидемиологические параметры
     simulator.set_transmission_rate(0.10)  # beta
     simulator.set_recovery_rate(0.10)      # gamma
     simulator.set_sampling_rate(0.01)      # sampling
 
-    # миграция: A -> B сильнее, чем B -> A
     simulator.set_migration_probability(0.02, source=0, target=1)    # mu_AB
     simulator.set_migration_probability(0.002, source=1, target=0)   # mu_BA
 

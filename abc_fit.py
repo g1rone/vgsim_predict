@@ -1,54 +1,344 @@
-import itertools
 import numpy as np
 import pandas as pd
 
 
-SUMMARY_COLS = ["mig_AB", "mig_BA", "final_A", "final_B", "t_end"]
+DEFAULT_TRAJECTORY_POINTS = 100
+
+AGGREGATE_COLS = [
+    "final_A",
+    "final_B",
+    "peak_A",
+    "peak_B",
+    "time_peak_A_frac",
+    "time_peak_B_frac",
+    "first_active_B_frac",
+    "area_active_A",
+    "area_active_B",
+    "mean_active_A",
+    "mean_active_B",
+    "cum_infections_A",
+    "cum_infections_B",
+    "cum_recoveries_A",
+    "cum_recoveries_B",
+]
+
+TIME_COLS = [
+    "t_end",
+]
+
+TRAJECTORY_SERIES = [
+    "active_A",
+    "active_B",
+    "infect_A",
+    "infect_B",
+    "recover_A",
+    "recover_B",
+]
+
+MIGRATION_COLS = [
+    "mig_AB",
+    "mig_BA",
+    "mig_total",
+    "mig_balance_abs",
+    "first_mig_AB_frac",
+    "first_mig_BA_frac",
+]
+
+DIAGNOSTIC_COLS = MIGRATION_COLS + [
+    "grid_reference_t_end",
+]
+
+DISPLAY_FIRST_COLS = [
+    "stage",
+    "mu",
+    "mu_AB_candidate",
+    "mu_BA_candidate",
+    "distance",
+    "trajectory_distance",
+    "aggregate_distance",
+    "time_distance",
+    "time_extra_distance",
+    "migration_distance",
+    "grid_size",
+    "search_radius",
+    "n_seeds",
+]
 
 
-def distance(sim, obs):
-    dist = 0.0
+def make_trajectory_cols(trajectory_points=DEFAULT_TRAJECTORY_POINTS):
+    trajectory_points = int(trajectory_points)
 
-    for col in SUMMARY_COLS:
-        dist += ((sim[col] - obs[col]) / (abs(obs[col]) + 1.0)) ** 2
+    if trajectory_points < 2:
+        raise ValueError("trajectory_points must be at least 2")
 
-    return float(np.sqrt(dist))
+    cols = []
+
+    for index in range(trajectory_points):
+        for series_name in TRAJECTORY_SERIES:
+            cols.append(f"grid_{index:03d}_{series_name}")
+
+    return cols
+
+
+def make_summary_cols(trajectory_points=DEFAULT_TRAJECTORY_POINTS):
+    return (
+        AGGREGATE_COLS
+        + TIME_COLS
+        + MIGRATION_COLS
+        + make_trajectory_cols(trajectory_points)
+    )
+
+
+SUMMARY_COLS = make_summary_cols(DEFAULT_TRAJECTORY_POINTS)
+
+
+def _safe_float(value):
+    return float(value)
+
+
+def _normalized_scalar_error(sim_value, obs_value):
+    sim_value = _safe_float(sim_value)
+    obs_value = _safe_float(obs_value)
+    return (sim_value - obs_value) / (abs(obs_value) + 1.0)
+
+
+def _time_ratio_error(sim_value, obs_value):
+    sim_value = max(_safe_float(sim_value), 0.0)
+    obs_value = max(_safe_float(obs_value), 0.0)
+    return abs(np.log((sim_value + 1.0) / (obs_value + 1.0)))
+
+
+def _series_scale(obs_values):
+    obs_values = np.asarray(obs_values, dtype=float)
+
+    if obs_values.size == 0:
+        return 1.0
+
+    p90 = float(np.percentile(np.abs(obs_values), 90))
+    rms = float(np.sqrt(np.mean(obs_values ** 2)))
+    mean_abs = float(np.mean(np.abs(obs_values)))
+
+    return max(p90, rms, mean_abs, 1.0)
+
+
+def _series_distance(sim, obs, cols):
+    sim_values = np.array([_safe_float(sim[col]) for col in cols], dtype=float)
+    obs_values = np.array([_safe_float(obs[col]) for col in cols], dtype=float)
+    scale = _series_scale(obs_values)
+    return float(np.sqrt(np.mean(((sim_values - obs_values) / scale) ** 2)))
+
+
+def _weighted_average_squared(items):
+    total_weight = 0.0
+    total_value = 0.0
+
+    for value, weight in items:
+        weight = float(weight)
+
+        if weight <= 0:
+            continue
+
+        total_weight += weight
+        total_value += weight * float(value) ** 2
+
+    if total_weight <= 0:
+        return 0.0
+
+    return float(np.sqrt(total_value / total_weight))
+
+
+def trajectory_distance(sim, obs, trajectory_points=DEFAULT_TRAJECTORY_POINTS):
+    items = []
+
+    for series_name in TRAJECTORY_SERIES:
+        cols = [
+            f"grid_{index:03d}_{series_name}"
+            for index in range(int(trajectory_points))
+        ]
+
+        if series_name.startswith("active"):
+            weight = 2.0
+        elif series_name.startswith("infect"):
+            weight = 1.5
+        elif series_name.startswith("recover"):
+            weight = 1.0
+        else:
+            weight = 1.0
+
+        items.append((_series_distance(sim, obs, cols), weight))
+
+    return _weighted_average_squared(items)
+
+
+def aggregate_distance(sim, obs):
+    weights = {
+        "final_A": 1.5,
+        "final_B": 1.5,
+        "peak_A": 2.5,
+        "peak_B": 2.5,
+        "time_peak_A_frac": 1.0,
+        "time_peak_B_frac": 1.0,
+        "first_active_B_frac": 2.0,
+        "area_active_A": 2.5,
+        "area_active_B": 2.5,
+        "mean_active_A": 1.5,
+        "mean_active_B": 1.5,
+        "cum_infections_A": 2.0,
+        "cum_infections_B": 2.0,
+        "cum_recoveries_A": 1.5,
+        "cum_recoveries_B": 1.5,
+    }
+
+    items = []
+
+    for col in AGGREGATE_COLS:
+        error = _normalized_scalar_error(sim[col], obs[col])
+        items.append((error, weights.get(col, 1.0)))
+
+    return _weighted_average_squared(items)
+
+
+def time_distance(sim, obs):
+    return _time_ratio_error(sim["t_end"], obs["t_end"])
+
+
+def time_extra_distance(sim, obs, time_tolerance=0.10):
+    tolerance = max(float(time_tolerance), 0.0)
+    base = time_distance(sim, obs)
+    allowed = np.log(1.0 + tolerance)
+    return float(max(0.0, base - allowed))
+
+
+def migration_distance(sim, obs):
+    weights = {
+        "mig_AB": 1.0,
+        "mig_BA": 1.0,
+        "mig_total": 3.0,
+        "mig_balance_abs": 1.0,
+        "first_mig_AB_frac": 0.5,
+        "first_mig_BA_frac": 0.5,
+    }
+
+    items = []
+
+    for col in MIGRATION_COLS:
+        error = _normalized_scalar_error(sim[col], obs[col])
+        items.append((error, weights.get(col, 1.0)))
+
+    return _weighted_average_squared(items)
+
+
+def distance_components(
+    sim,
+    obs,
+    trajectory_points=DEFAULT_TRAJECTORY_POINTS,
+    trajectory_weight=1.0,
+    aggregate_weight=0.75,
+    time_weight=1.0,
+    time_extra_weight=3.0,
+    time_tolerance=0.10,
+    migration_weight=0.0,
+):
+    tr = trajectory_distance(sim, obs, trajectory_points)
+    ag = aggregate_distance(sim, obs)
+    tm = time_distance(sim, obs)
+    te = time_extra_distance(sim, obs, time_tolerance)
+    mg = migration_distance(sim, obs)
+
+    items = [
+        (tr, trajectory_weight),
+        (ag, aggregate_weight),
+        (tm, time_weight),
+        (te, time_extra_weight),
+        (mg, migration_weight),
+    ]
+
+    total = _weighted_average_squared(items)
+
+    return {
+        "distance": float(total),
+        "trajectory_distance": float(tr),
+        "aggregate_distance": float(ag),
+        "time_distance": float(tm),
+        "time_extra_distance": float(te),
+        "migration_distance": float(mg),
+    }
+
+
+def distance(
+    sim,
+    obs,
+    trajectory_points=DEFAULT_TRAJECTORY_POINTS,
+    trajectory_weight=1.0,
+    aggregate_weight=0.75,
+    time_weight=1.0,
+    time_extra_weight=3.0,
+    time_tolerance=0.10,
+    migration_weight=0.0,
+):
+    return distance_components(
+        sim=sim,
+        obs=obs,
+        trajectory_points=trajectory_points,
+        trajectory_weight=trajectory_weight,
+        aggregate_weight=aggregate_weight,
+        time_weight=time_weight,
+        time_extra_weight=time_extra_weight,
+        time_tolerance=time_tolerance,
+        migration_weight=migration_weight,
+    )["distance"]
 
 
 def _unique_sorted(values, decimals=12):
-    return np.array(sorted(set(round(float(v), decimals) for v in values)), dtype=float)
+    return np.array(
+        sorted(set(round(float(v), decimals) for v in values)),
+        dtype=float,
+    )
 
 
 def _mean_simulation_result(simulations):
-    result = {}
+    if len(simulations) == 0:
+        raise ValueError("simulations must contain at least one element")
 
-    for col in SUMMARY_COLS:
-        result[col] = float(np.mean([sim[col] for sim in simulations]))
+    result = {}
+    all_cols = list(simulations[0].keys())
+
+    for col in all_cols:
+        values = [float(sim[col]) for sim in simulations]
+        result[col] = float(np.mean(values))
 
     return result
+
+
+def _parse_seeds(seeds):
+    if isinstance(seeds, str):
+        parts = [part.strip() for part in seeds.split(",")]
+        return tuple(int(part) for part in parts if part != "")
+
+    return tuple(int(seed) for seed in seeds)
 
 
 def fit_equal_mu_refined(
     obs,
     mu_grid,
     simulate_func,
-    top_k=3,
-    refine_steps=4,
-    refine_points=15,
+    top_k=2,
+    refine_steps=2,
+    refine_points=7,
     shrink=0.35,
-    seeds=(0, 1, 2),
+    seeds=(1, 2, 3),
+    trajectory_points=DEFAULT_TRAJECTORY_POINTS,
+    trajectory_weight=1.0,
+    aggregate_weight=0.75,
+    time_weight=1.0,
+    time_extra_weight=3.0,
+    time_tolerance=0.10,
+    migration_weight=0.0,
+    progress_callback=None,
 ):
-    """
-    Подбор равного mu через грубую сетку и последовательное уточнение.
-
-    Идея:
-    1. Сначала проверяем грубую сетку.
-    2. Берём top_k лучших значений.
-    3. Вокруг них строим более мелкие сетки.
-    4. Повторяем refine_steps раз.
-    """
-
     mu_grid = _unique_sorted(mu_grid)
+    seeds = _parse_seeds(seeds)
+    trajectory_points = int(trajectory_points)
 
     if len(mu_grid) < 2:
         raise ValueError("mu_grid must contain at least two values")
@@ -62,6 +352,15 @@ def fit_equal_mu_refined(
     if refine_points < 2:
         raise ValueError("refine_points must be at least 2")
 
+    if not 0 < shrink < 1:
+        raise ValueError("shrink must be between 0 and 1")
+
+    if len(seeds) == 0:
+        raise ValueError("seeds must contain at least one seed")
+
+    if trajectory_points < 2:
+        raise ValueError("trajectory_points must be at least 2")
+
     mu_min = float(mu_grid.min())
     mu_max = float(mu_grid.max())
 
@@ -73,40 +372,63 @@ def fit_equal_mu_refined(
 
     for stage in range(refine_steps + 1):
         rows = []
+        grid_size = len(current_grid)
 
-        for mu in current_grid:
+        for index, mu in enumerate(current_grid, start=1):
+            if progress_callback is not None:
+                progress_callback(stage, refine_steps, index, grid_size, float(mu))
+
             simulations = []
-            distances = []
 
             for seed in seeds:
-                sim = simulate_func(mu, mu, seed=seed)
+                sim = simulate_func(float(mu), float(mu), seed=int(seed))
                 simulations.append(sim)
-                distances.append(distance(sim, obs))
 
             mean_sim = _mean_simulation_result(simulations)
-            mean_distance = float(np.mean(distances))
+            dist_info = distance_components(
+                sim=mean_sim,
+                obs=obs,
+                trajectory_points=trajectory_points,
+                trajectory_weight=trajectory_weight,
+                aggregate_weight=aggregate_weight,
+                time_weight=time_weight,
+                time_extra_weight=time_extra_weight,
+                time_tolerance=time_tolerance,
+                migration_weight=migration_weight,
+            )
 
             rows.append({
-                "stage": stage,
-                "mu_AB": float(mu),
-                "mu_BA": float(mu),
-                "distance": mean_distance,
+                "stage": int(stage),
+                "mu": float(mu),
+                "mu_AB_candidate": float(mu),
+                "mu_BA_candidate": float(mu),
+                "distance": dist_info["distance"],
+                "trajectory_distance": dist_info["trajectory_distance"],
+                "aggregate_distance": dist_info["aggregate_distance"],
+                "time_distance": dist_info["time_distance"],
+                "time_extra_distance": dist_info["time_extra_distance"],
+                "migration_distance": dist_info["migration_distance"],
+                "grid_size": int(grid_size),
+                "search_radius": float(radius),
+                "n_seeds": int(len(seeds)),
                 **mean_sim,
             })
 
-        stage_df = pd.DataFrame(rows).sort_values("distance").reset_index(drop=True)
-        all_rows.append(stage_df)
+        stage_df = (
+            pd.DataFrame(rows)
+            .sort_values("distance")
+            .reset_index(drop=True)
+        )
 
-        best_mus = stage_df.head(top_k)["mu_AB"].to_numpy()
+        all_rows.append(stage_df)
+        best_mus = stage_df.head(top_k)["mu"].to_numpy()
 
         radius *= shrink
-
         next_grid_values = []
 
         for best_mu in best_mus:
-            left = max(mu_min, best_mu - radius)
-            right = min(mu_max, best_mu + radius)
-
+            left = max(mu_min, float(best_mu) - radius)
+            right = min(mu_max, float(best_mu) + radius)
             next_grid_values.extend(np.linspace(left, right, refine_points))
 
         current_grid = _unique_sorted(next_grid_values)
@@ -115,20 +437,3 @@ def fit_equal_mu_refined(
     result = result.sort_values("distance").reset_index(drop=True)
 
     return result
-
-
-def fit_unequal_mu(obs, mu_grid, simulate_func):
-    rows = []
-
-    for mu_ab, mu_ba in itertools.product(mu_grid, mu_grid):
-        sim = simulate_func(mu_ab, mu_ba, seed=0)
-        d = distance(sim, obs)
-
-        rows.append({
-            "mu_AB": mu_ab,
-            "mu_BA": mu_ba,
-            "distance": d,
-            **sim,
-        })
-
-    return pd.DataFrame(rows).sort_values("distance").reset_index(drop=True)
