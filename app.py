@@ -14,6 +14,7 @@ from abc_fit import (
     DISPLAY_FIRST_COLS,
     distance_components,
     fit_equal_mu_refined,
+    fit_unequal_mu_refined,
 )
 
 
@@ -66,6 +67,9 @@ state = {
     "last_fit_df": None,
     "last_posterior_df": None,
     "best_fit_mu": None,
+    "best_fit_mu_ab": None,
+    "best_fit_mu_ba": None,
+    "best_fit_kind": None,
     "best_fit_seed": None,
 }
 
@@ -93,6 +97,9 @@ def clear_fit_outputs():
     state["last_fit_df"] = None
     state["last_posterior_df"] = None
     state["best_fit_mu"] = None
+    state["best_fit_mu_ab"] = None
+    state["best_fit_mu_ba"] = None
+    state["best_fit_kind"] = None
     state["best_fit_seed"] = None
 
 
@@ -915,8 +922,8 @@ def show_observation_plot():
 
 
 def show_best_fit_plot():
-    if state["best_fit_mu"] is None:
-        warn("Нет подбора", "Сначала выполни equal-fit.")
+    if state["best_fit_mu_ab"] is None or state["best_fit_mu_ba"] is None:
+        warn("Нет подбора", "Сначала выполни fit.")
         return
 
     distance_params = get_distance_params()
@@ -933,8 +940,8 @@ def show_best_fit_plot():
         update_status("Строим график лучшей подобранной симуляции...")
 
         _, timeline = simulate(
-            state["best_fit_mu"],
-            state["best_fit_mu"],
+            state["best_fit_mu_ab"],
+            state["best_fit_mu_ba"],
             seed=state["best_fit_seed"],
             trajectory_points=trajectory_points,
             grid_start_frac=grid_start_frac,
@@ -946,7 +953,10 @@ def show_best_fit_plot():
         path = PLOTS_DIR / "best_fit_active.png"
         _plot_active_timeline(
             timeline,
-            f"Лучшая чистая симуляция: mu = {state['best_fit_mu']:.6f}, seed = {state['best_fit_seed']}",
+            f"Лучшая чистая симуляция ({state['best_fit_kind']}): "
+            f"mu_AB = {state['best_fit_mu_ab']:.6f}, "
+            f"mu_BA = {state['best_fit_mu_ba']:.6f}, "
+            f"seed = {state['best_fit_seed']}",
             path,
         )
         update_status(f"График лучшей симуляции сохранён: {path}")
@@ -1067,6 +1077,9 @@ def fit_equal_mu():
         best = result.iloc[0]
         state["last_fit_df"] = result
         state["best_fit_mu"] = float(best["mu"])
+        state["best_fit_mu_ab"] = float(best["mu_AB_candidate"])
+        state["best_fit_mu_ba"] = float(best["mu_BA_candidate"])
+        state["best_fit_kind"] = "equal"
         state["best_fit_seed"] = int(seeds[0])
 
         target_label = "шумному наблюдению" if noise_enabled() else "чистому наблюдению"
@@ -1092,10 +1105,102 @@ def fit_equal_mu():
         update_status("Ошибка при equal-fit.")
 
 
+def fit_unequal_mu():
+    mu_grid = get_mu_grid()
+    distance_params = get_distance_params()
+    fit_params = get_fit_params()
+    vgsim_params = get_vgsim_params()
+
+    if mu_grid is None or distance_params is None or fit_params is None or vgsim_params is None:
+        return
+
+    trajectory_points, grid_start_frac, grid_end_frac = distance_params[:3]
+    grid_signature = (trajectory_points, grid_start_frac, grid_end_frac)
+
+    if not check_observation_compatibility(vgsim_params, grid_signature):
+        return
+
+    top_k, refine_steps, refine_points, shrink, seeds = fit_params
+    reference_t_end = float(state["observed_data"]["t_end"])
+
+    def simulate_candidate(mu_ab, mu_ba, seed=0):
+        return _simulate_candidate_for_distance(
+            mu_ab=mu_ab,
+            mu_ba=mu_ba,
+            seed=seed,
+            distance_params=distance_params,
+            vgsim_params=vgsim_params,
+            reference_t_end=reference_t_end,
+        )
+
+    try:
+        update_status("Запускаем unequal-fit через VGsim...")
+
+        result = fit_unequal_mu_refined(
+            obs=state["observed_data"],
+            mu_ab_grid=mu_grid,
+            mu_ba_grid=mu_grid,
+            simulate_func=simulate_candidate,
+            top_k=top_k,
+            refine_steps=refine_steps,
+            refine_points=refine_points,
+            shrink=shrink,
+            seeds=seeds,
+            trajectory_points=trajectory_points,
+            trajectory_weight=distance_params[3],
+            aggregate_weight=distance_params[4],
+            time_weight=distance_params[5],
+            time_extra_weight=distance_params[6],
+            time_tolerance=distance_params[7],
+            migration_weight=distance_params[8],
+            progress_callback=lambda stage, max_stage, index, grid_size, mu_ab, mu_ba: update_status(
+                f"Unequal-fit: stage {stage}/{max_stage}, pair {index}/{grid_size}, "
+                f"mu_AB = {mu_ab:.6f}, mu_BA = {mu_ba:.6f}"
+            ),
+        )
+
+        best = result.iloc[0]
+        state["last_fit_df"] = result
+        state["best_fit_mu"] = float(best["mu"])
+        state["best_fit_mu_ab"] = float(best["mu_AB_candidate"])
+        state["best_fit_mu_ba"] = float(best["mu_BA_candidate"])
+        state["best_fit_kind"] = "unequal"
+        state["best_fit_seed"] = int(seeds[0])
+
+        target_label = "шумному наблюдению" if noise_enabled() else "чистому наблюдению"
+
+        result_label.config(
+            text=(
+                f"Лучший unequal-fit по {target_label}: "
+                f"mu_AB = {best['mu_AB_candidate']:.6f}, "
+                f"mu_BA = {best['mu_BA_candidate']:.6f}, "
+                f"distance = {best['distance']:.6f}, "
+                f"traj/agg/time/textra/mig = "
+                f"{best['trajectory_distance']:.4f}/"
+                f"{best['aggregate_distance']:.4f}/"
+                f"{best['time_distance']:.4f}/"
+                f"{best['time_extra_distance']:.4f}/"
+                f"{best['migration_distance']:.4f}."
+            )
+        )
+
+        update_status("Unequal-fit готов.")
+        show_table(result)
+
+    except Exception as error:
+        fail("Ошибка", f"Не удалось выполнить unequal-fit:\n{error}")
+        update_status("Ошибка при unequal-fit.")
+
 def create_observation_and_fit():
     create_observation()
     if state["observed_data"] is not None:
         fit_equal_mu()
+
+
+def create_observation_and_fit_unequal():
+    create_observation()
+    if state["observed_data"] is not None:
+        fit_unequal_mu()
 
 
 def show_abc_posterior_distribution():
@@ -1230,7 +1335,7 @@ def show_abc_posterior_distribution():
 reset_run_dirs()
 
 root = tk.Tk()
-root.title("VGsim Predict - equal mu + underreporting")
+root.title("VGsim Predict - equal/unequal mu + underreporting")
 root.geometry("1550x950")
 root.minsize(1300, 800)
 
@@ -1314,7 +1419,7 @@ time_extra_weight_entry = _make_entry(distance_frame, 1, 6, "time extra weight",
 time_tolerance_entry = _make_entry(distance_frame, 2, 0, "time tolerance", "0.10")
 migration_weight_entry = _make_entry(distance_frame, 2, 2, "migration event weight", "0.0")
 
-fit_frame = ttk.LabelFrame(root, text="Параметры refined equal-fit")
+fit_frame = ttk.LabelFrame(root, text="Параметры refined fit")
 fit_frame.pack(fill="x", padx=10, pady=5)
 
 top_k_entry = _make_entry(fit_frame, 0, 0, "top_k", "3")
@@ -1336,7 +1441,9 @@ actions_frame.pack(fill="x", padx=10, pady=5)
 
 ttk.Button(actions_frame, text="Просимулировать", command=create_observation, width=34).grid(row=0, column=0, padx=5, pady=4)
 ttk.Button(actions_frame, text="Подобрать equal mu", command=fit_equal_mu, width=34).grid(row=0, column=1, padx=5, pady=4)
-ttk.Button(actions_frame, text="Просимулировать + подобрать", command=create_observation_and_fit, width=44).grid(row=0, column=2, padx=5, pady=4)
+ttk.Button(actions_frame, text="Подобрать unequal mu", command=fit_unequal_mu, width=34).grid(row=0, column=2, padx=5, pady=4)
+ttk.Button(actions_frame, text="Просимулировать + equal", command=create_observation_and_fit, width=34).grid(row=0, column=3, padx=5, pady=4)
+ttk.Button(actions_frame, text="Просимулировать + unequal", command=create_observation_and_fit_unequal, width=34).grid(row=0, column=4, padx=5, pady=4)
 ttk.Button(actions_frame, text="Исходный граф", command=show_observation_plot, width=34).grid(row=1, column=0, padx=5, pady=4)
 ttk.Button(actions_frame, text="Подобранный граф", command=show_best_fit_plot, width=34).grid(row=1, column=1, padx=5, pady=4)
 ttk.Button(actions_frame, text="ABC posterior по mu", command=show_abc_posterior_distribution, width=34).grid(row=1, column=2, padx=5, pady=4)
