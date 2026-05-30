@@ -712,19 +712,28 @@ def get_observation_params():
 
 def get_distance_params():
     try:
+        trajectory_points = _as_int(trajectory_points_entry)
+        grid_start_frac = _as_float(grid_start_entry) / 100.0
+        grid_end_frac = _as_float(grid_end_entry) / 100.0
+        trajectory_weight = _as_float(trajectory_weight_entry)
+        aggregate_weight = _as_float(aggregate_weight_entry)
+        time_weight = _as_float(time_weight_entry)
+        time_extra_weight = _as_float(time_extra_weight_entry)
+        time_tolerance = _as_float(time_tolerance_entry) / 100.0
+        migration_weight = _as_float(migration_weight_entry)
+
         params = (
-            _as_int(trajectory_points_entry),
-            _as_float(grid_start_entry),
-            _as_float(grid_end_entry),
-            _as_float(trajectory_weight_entry),
-            _as_float(aggregate_weight_entry),
-            _as_float(time_weight_entry),
-            _as_float(time_extra_weight_entry),
-            _as_float(time_tolerance_entry),
-            _as_float(migration_weight_entry),
+            trajectory_points,
+            grid_start_frac,
+            grid_end_frac,
+            trajectory_weight,
+            aggregate_weight,
+            time_weight,
+            time_extra_weight,
+            time_tolerance,
+            migration_weight,
         )
 
-        trajectory_points, grid_start_frac, grid_end_frac = params[:3]
         weights = params[3:]
 
         if trajectory_points < 2:
@@ -739,7 +748,7 @@ def get_distance_params():
         return params
 
     except ValueError:
-        fail("Ошибка", "Проверь параметры distance.")
+        fail("Ошибка", "Проверь параметры distance: grid start/end и time tolerance задаются в процентах.")
         return None
 
 
@@ -1664,13 +1673,13 @@ distance_frame = ttk.LabelFrame(root, text="Параметры distance")
 distance_frame.pack(fill="x", padx=10, pady=5)
 
 trajectory_points_entry = _make_entry(distance_frame, 0, 0, "trajectory points", "100")
-grid_start_entry = _make_entry(distance_frame, 0, 2, "grid start frac", "0.00")
-grid_end_entry = _make_entry(distance_frame, 0, 4, "grid end frac", "1.00")
+grid_start_entry = _make_entry(distance_frame, 0, 2, "grid start (%)", "0.00")
+grid_end_entry = _make_entry(distance_frame, 0, 4, "grid end (%)", "100.00")
 trajectory_weight_entry = _make_entry(distance_frame, 1, 0, "trajectory weight", "1.0")
 aggregate_weight_entry = _make_entry(distance_frame, 1, 2, "aggregate weight", "0.75")
 time_weight_entry = _make_entry(distance_frame, 1, 4, "time weight", "1.0")
 time_extra_weight_entry = _make_entry(distance_frame, 1, 6, "time extra weight", "3.0")
-time_tolerance_entry = _make_entry(distance_frame, 2, 0, "time tolerance frac", "0.10")
+time_tolerance_entry = _make_entry(distance_frame, 2, 0, "time tolerance (%)", "10.00")
 migration_weight_entry = _make_entry(distance_frame, 2, 2, "migration event weight", "0.0")
 
 fit_frame = ttk.LabelFrame(root, text="Параметры поиска")
