@@ -1621,7 +1621,7 @@ style.configure("Treeview", rowheight=24)
 settings_frame = ttk.LabelFrame(root, text="Сетка поиска mu")
 settings_frame.pack(fill="x", padx=10, pady=5)
 
-mu_min_entry = _make_entry(settings_frame, 0, 0, "min mu", "0.001")
+mu_min_entry = _make_entry(settings_frame, 0, 0, "min mu", "0.000")
 mu_max_entry = _make_entry(settings_frame, 0, 2, "max mu", "0.300")
 steps_entry = _make_entry(settings_frame, 0, 4, "steps", "10")
 
@@ -1638,14 +1638,14 @@ iterations_entry = _make_entry(virus_frame, 2, 0, "iterations", DEFAULT_VGSIM_PA
 sample_size_entry = _make_entry(virus_frame, 2, 2, "sample size", DEFAULT_VGSIM_PARAMS["sample_size"], width=14)
 method_entry = _make_entry(virus_frame, 2, 4, "method", DEFAULT_VGSIM_PARAMS["method"])
 
-obs_frame = ttk.LabelFrame(root, text="Параметры создания тестового наблюдения VGsim")
+obs_frame = ttk.LabelFrame(root, text="Параметры миграции VGsim")
 obs_frame.pack(fill="x", padx=10, pady=5)
 
 obs_mu_ab_entry = _make_entry(obs_frame, 0, 0, "obs mu_AB", "0.100")
 obs_mu_ba_entry = _make_entry(obs_frame, 0, 2, "obs mu_BA", "0.100")
 obs_seed_entry = _make_entry(obs_frame, 0, 4, "obs seed", "777")
 
-noise_frame = ttk.LabelFrame(root, text="Модель наблюдения: неполная регистрация")
+noise_frame = ttk.LabelFrame(root, text="Симуляция неполной регистрации")
 noise_frame.pack(fill="x", padx=10, pady=5)
 
 noise_enabled_var = tk.BooleanVar(value=False)
@@ -1679,16 +1679,16 @@ distance_frame = ttk.LabelFrame(root, text="Параметры distance")
 distance_frame.pack(fill="x", padx=10, pady=5)
 
 trajectory_points_entry = _make_entry(distance_frame, 0, 0, "trajectory points", "100")
-grid_start_entry = _make_entry(distance_frame, 0, 2, "grid start", "0.00")
-grid_end_entry = _make_entry(distance_frame, 0, 4, "grid end", "1.00")
+grid_start_entry = _make_entry(distance_frame, 0, 2, "grid start (%)", "0.00")
+grid_end_entry = _make_entry(distance_frame, 0, 4, "grid end (%)", "1.00")
 trajectory_weight_entry = _make_entry(distance_frame, 1, 0, "trajectory weight", "1.0")
 aggregate_weight_entry = _make_entry(distance_frame, 1, 2, "aggregate weight", "0.75")
 time_weight_entry = _make_entry(distance_frame, 1, 4, "time weight", "1.0")
 time_extra_weight_entry = _make_entry(distance_frame, 1, 6, "time extra weight", "3.0")
-time_tolerance_entry = _make_entry(distance_frame, 2, 0, "time tolerance", "0.10")
+time_tolerance_entry = _make_entry(distance_frame, 2, 0, "time tolerance (%)", "0.10")
 migration_weight_entry = _make_entry(distance_frame, 2, 2, "migration event weight", "0.0")
 
-fit_frame = ttk.LabelFrame(root, text="Параметры refined fit")
+fit_frame = ttk.LabelFrame(root, text="Параметры поиска")
 fit_frame.pack(fill="x", padx=10, pady=5)
 
 top_k_entry = _make_entry(fit_frame, 0, 0, "top_k", "3")
@@ -1708,15 +1708,18 @@ posterior_bins_entry = _make_entry(posterior_frame, 0, 6, "bins", "12")
 actions_frame = ttk.LabelFrame(root, text="Действия")
 actions_frame.pack(fill="x", padx=10, pady=5)
 
-ttk.Button(actions_frame, text="Просимулировать", command=create_observation, width=34).grid(row=0, column=0, padx=5, pady=4)
-ttk.Button(actions_frame, text="Подобрать equal mu", command=fit_equal_mu, width=34).grid(row=0, column=1, padx=5, pady=4)
-ttk.Button(actions_frame, text="Подобрать unequal mu", command=fit_unequal_mu, width=34).grid(row=0, column=3, padx=5, pady=4)
-ttk.Button(actions_frame, text="Подобрать unequal fast", command=fit_unequal_mu_fast, width=34).grid(row=0, column=4, padx=5, pady=4)
-ttk.Button(actions_frame, text="Просимулировать + equal", command=create_observation_and_fit, width=34).grid(row=0, column=2, padx=5, pady=4)
-ttk.Button(actions_frame, text="Исходный граф", command=show_observation_plot, width=34).grid(row=1, column=0, padx=5, pady=4)
-ttk.Button(actions_frame, text="Подобранный граф", command=show_best_fit_plot, width=34).grid(row=1, column=1, padx=5, pady=4)
-ttk.Button(actions_frame, text="ABC posterior по mu", command=show_abc_posterior_distribution, width=34).grid(row=1, column=2, padx=5, pady=4)
-ttk.Button(actions_frame, text="ABC posterior unequal", command=show_abc_unequal_posterior_distribution, width=34).grid(row=1, column=3, padx=5, pady=4)
+for col in range(4):
+    actions_frame.columnconfigure(col, weight=1)
+
+ttk.Button(actions_frame, text="Просимулировать", command=create_observation, width=34).grid(row=0, column=0, padx=5, pady=4, sticky="ew")
+ttk.Button(actions_frame, text="Подобрать equal mu", command=fit_equal_mu, width=34).grid(row=0, column=1, padx=5, pady=4, sticky="ew")
+ttk.Button(actions_frame, text="Подобрать unequal mu", command=fit_unequal_mu, width=34).grid(row=0, column=2, padx=5, pady=4, sticky="ew")
+ttk.Button(actions_frame, text="Подобрать unequal fast", command=fit_unequal_mu_fast, width=34).grid(row=0, column=3, padx=5, pady=4, sticky="ew")
+
+ttk.Button(actions_frame, text="Исходный граф", command=show_observation_plot, width=34).grid(row=1, column=0, padx=5, pady=4, sticky="ew")
+ttk.Button(actions_frame, text="Подобранный граф", command=show_best_fit_plot, width=34).grid(row=1, column=1, padx=5, pady=4, sticky="ew")
+ttk.Button(actions_frame, text="ABC posterior equal", command=show_abc_posterior_distribution, width=34).grid(row=1, column=2, padx=5, pady=4, sticky="ew")
+ttk.Button(actions_frame, text="ABC posterior unequal", command=show_abc_unequal_posterior_distribution, width=34).grid(row=1, column=3, padx=5, pady=4, sticky="ew")
 
 status_label = ttk.Label(root, text="Готово.", anchor="w")
 status_label.pack(fill="x", padx=10, pady=5)
