@@ -66,33 +66,18 @@ DISPLAY_FIRST_COLS = [
 ]
 
 
-def trajectory_cols(trajectory_points=DEFAULT_TRAJECTORY_POINTS):
-    trajectory_points = int(trajectory_points)
-
-    if trajectory_points < 2:
-        raise ValueError("trajectory_points must be at least 2")
-
-    cols = []
-
-    for index in range(trajectory_points):
-        for series_name in TRAJECTORY_SERIES:
-            cols.append(f"grid_{index:03d}_{series_name}")
-
-    return cols
-
 def make_trajectory_cols(trajectory_points=DEFAULT_TRAJECTORY_POINTS):
     trajectory_points = int(trajectory_points)
 
     if trajectory_points < 2:
         raise ValueError("trajectory_points must be at least 2")
 
-    cols = []
+    return [
+        f"grid_{index:03d}_{series_name}"
+        for index in range(trajectory_points)
+        for series_name in TRAJECTORY_SERIES
+    ]
 
-    for index in range(trajectory_points):
-        for series_name in TRAJECTORY_SERIES:
-            cols.append(f"grid_{index:03d}_{series_name}")
-
-    return cols
 
 def make_summary_cols(trajectory_points=DEFAULT_TRAJECTORY_POINTS):
     return (
@@ -106,19 +91,15 @@ def make_summary_cols(trajectory_points=DEFAULT_TRAJECTORY_POINTS):
 SUMMARY_COLS = make_summary_cols(DEFAULT_TRAJECTORY_POINTS)
 
 
-def _safe_float(value):
-    return float(value)
-
-
 def _normalized_scalar_error(sim_value, obs_value):
-    sim_value = _safe_float(sim_value)
-    obs_value = _safe_float(obs_value)
+    sim_value = float(sim_value)
+    obs_value = float(obs_value)
     return (sim_value - obs_value) / (abs(obs_value) + 1.0)
 
 
 def _time_ratio_error(sim_value, obs_value):
-    sim_value = max(_safe_float(sim_value), 0.0)
-    obs_value = max(_safe_float(obs_value), 0.0)
+    sim_value = max(float(sim_value), 0.0)
+    obs_value = max(float(obs_value), 0.0)
     return abs(np.log((sim_value + 1.0) / (obs_value + 1.0)))
 
 
@@ -136,8 +117,8 @@ def _series_scale(obs_values):
 
 
 def _series_distance(sim, obs, cols):
-    sim_values = np.array([_safe_float(sim[col]) for col in cols], dtype=float)
-    obs_values = np.array([_safe_float(obs[col]) for col in cols], dtype=float)
+    sim_values = np.array([float(sim[col]) for col in cols], dtype=float)
+    obs_values = np.array([float(obs[col]) for col in cols], dtype=float)
     scale = _series_scale(obs_values)
     return float(np.sqrt(np.mean(((sim_values - obs_values) / scale) ** 2)))
 
@@ -174,8 +155,6 @@ def trajectory_distance(sim, obs, trajectory_points=DEFAULT_TRAJECTORY_POINTS):
             weight = 2.0
         elif series_name.startswith("infect"):
             weight = 1.5
-        elif series_name.startswith("recover"):
-            weight = 1.0
         else:
             weight = 1.0
 
@@ -203,13 +182,10 @@ def aggregate_distance(sim, obs):
         "cum_recoveries_B": 1.5,
     }
 
-    items = []
-
-    for col in AGGREGATE_COLS:
-        error = _normalized_scalar_error(sim[col], obs[col])
-        items.append((error, weights.get(col, 1.0)))
-
-    return _weighted_average_squared(items)
+    return _weighted_average_squared(
+        (_normalized_scalar_error(sim[col], obs[col]), weights.get(col, 1.0))
+        for col in AGGREGATE_COLS
+    )
 
 
 def time_distance(sim, obs):
@@ -233,13 +209,10 @@ def migration_distance(sim, obs):
         "first_mig_BA_frac": 0.5,
     }
 
-    items = []
-
-    for col in MIGRATION_COLS:
-        error = _normalized_scalar_error(sim[col], obs[col])
-        items.append((error, weights.get(col, 1.0)))
-
-    return _weighted_average_squared(items)
+    return _weighted_average_squared(
+        (_normalized_scalar_error(sim[col], obs[col]), weights.get(col, 1.0))
+        for col in MIGRATION_COLS
+    )
 
 
 def distance_components(
@@ -259,15 +232,13 @@ def distance_components(
     te = time_extra_distance(sim, obs, time_tolerance)
     mg = migration_distance(sim, obs)
 
-    items = [
+    total = _weighted_average_squared([
         (tr, trajectory_weight),
         (ag, aggregate_weight),
         (tm, time_weight),
         (te, time_extra_weight),
         (mg, migration_weight),
-    ]
-
-    total = _weighted_average_squared(items)
+    ])
 
     return {
         "distance": float(total),
@@ -305,152 +276,10 @@ def distance(
 
 def _unique_sorted(values, decimals=12):
     return np.array(
-        sorted(set(round(float(v), decimals) for v in values)),
+        sorted(set(round(float(value), decimals) for value in values)),
         dtype=float,
     )
 
-
-def _mean_simulation_result(simulations):
-    if len(simulations) == 0:
-        raise ValueError("simulations must contain at least one element")
-
-    result = {}
-    all_cols = list(simulations[0].keys())
-
-    for col in all_cols:
-        values = [float(sim[col]) for sim in simulations]
-        result[col] = float(np.mean(values))
-
-    return result
-
-
-def _parse_seeds(seeds):
-    if isinstance(seeds, str):
-        parts = [part.strip() for part in seeds.split(",")]
-        return tuple(int(part) for part in parts if part != "")
-
-    return tuple(int(seed) for seed in seeds)
-
-
-def fit_equal_mu_refined(
-    obs,
-    mu_grid,
-    simulate_func,
-    top_k=2,
-    refine_steps=2,
-    refine_points=7,
-    shrink=0.35,
-    seeds=(1, 2, 3),
-    trajectory_points=DEFAULT_TRAJECTORY_POINTS,
-    trajectory_weight=1.0,
-    aggregate_weight=0.75,
-    time_weight=1.0,
-    time_extra_weight=3.0,
-    time_tolerance=0.10,
-    migration_weight=0.0,
-    progress_callback=None,
-):
-    mu_grid = _unique_sorted(mu_grid)
-    seeds = _parse_seeds(seeds)
-    trajectory_points = int(trajectory_points)
-
-    if len(mu_grid) < 2:
-        raise ValueError("mu_grid must contain at least two values")
-
-    if top_k < 1:
-        raise ValueError("top_k must be positive")
-
-    if refine_steps < 0:
-        raise ValueError("refine_steps must be non-negative")
-
-    if refine_points < 2:
-        raise ValueError("refine_points must be at least 2")
-
-    if not 0 < shrink < 1:
-        raise ValueError("shrink must be between 0 and 1")
-
-    if len(seeds) == 0:
-        raise ValueError("seeds must contain at least one seed")
-
-    if trajectory_points < 2:
-        raise ValueError("trajectory_points must be at least 2")
-
-    mu_min = float(mu_grid.min())
-    mu_max = float(mu_grid.max())
-
-    initial_step = float(np.median(np.diff(mu_grid)))
-    radius = initial_step
-
-    current_grid = mu_grid
-    all_rows = []
-
-    for stage in range(refine_steps + 1):
-        rows = []
-        grid_size = len(current_grid)
-
-        for index, mu in enumerate(current_grid, start=1):
-            if progress_callback is not None:
-                progress_callback(stage, refine_steps, index, grid_size, float(mu))
-
-            simulations = []
-
-            for seed in seeds:
-                sim = simulate_func(float(mu), float(mu), seed=int(seed))
-                simulations.append(sim)
-
-            mean_sim = _mean_simulation_result(simulations)
-            dist_info = distance_components(
-                sim=mean_sim,
-                obs=obs,
-                trajectory_points=trajectory_points,
-                trajectory_weight=trajectory_weight,
-                aggregate_weight=aggregate_weight,
-                time_weight=time_weight,
-                time_extra_weight=time_extra_weight,
-                time_tolerance=time_tolerance,
-                migration_weight=migration_weight,
-            )
-
-            rows.append({
-                "stage": int(stage),
-                "mu": float(mu),
-                "mu_AB_candidate": float(mu),
-                "mu_BA_candidate": float(mu),
-                "distance": dist_info["distance"],
-                "trajectory_distance": dist_info["trajectory_distance"],
-                "aggregate_distance": dist_info["aggregate_distance"],
-                "time_distance": dist_info["time_distance"],
-                "time_extra_distance": dist_info["time_extra_distance"],
-                "migration_distance": dist_info["migration_distance"],
-                "grid_size": int(grid_size),
-                "search_radius": float(radius),
-                "n_seeds": int(len(seeds)),
-                **mean_sim,
-            })
-
-        stage_df = (
-            pd.DataFrame(rows)
-            .sort_values("distance")
-            .reset_index(drop=True)
-        )
-
-        all_rows.append(stage_df)
-        best_mus = stage_df.head(top_k)["mu"].to_numpy()
-
-        radius *= shrink
-        next_grid_values = []
-
-        for best_mu in best_mus:
-            left = max(mu_min, float(best_mu) - radius)
-            right = min(mu_max, float(best_mu) + radius)
-            next_grid_values.extend(np.linspace(left, right, refine_points))
-
-        current_grid = _unique_sorted(next_grid_values)
-
-    result = pd.concat(all_rows, ignore_index=True)
-    result = result.sort_values("distance").reset_index(drop=True)
-
-    return result
 
 def _unique_sorted_pairs(pairs, decimals=12):
     return np.array(
@@ -468,155 +297,46 @@ def _unique_sorted_pairs(pairs, decimals=12):
 
 
 def _make_pair_grid(mu_ab_grid, mu_ba_grid):
-    pairs = []
-
-    for mu_ab in mu_ab_grid:
-        for mu_ba in mu_ba_grid:
-            pairs.append((float(mu_ab), float(mu_ba)))
-
-    return _unique_sorted_pairs(pairs)
+    return _unique_sorted_pairs(
+        (float(mu_ab), float(mu_ba))
+        for mu_ab in mu_ab_grid
+        for mu_ba in mu_ba_grid
+    )
 
 
-def fit_unequal_mu_refined(
-    obs,
-    mu_ab_grid,
-    mu_ba_grid,
-    simulate_func,
-    top_k=3,
-    refine_steps=2,
-    refine_points=5,
-    shrink=0.35,
-    seeds=(1, 2, 3),
-    trajectory_points=DEFAULT_TRAJECTORY_POINTS,
-    trajectory_weight=1.0,
-    aggregate_weight=0.75,
-    time_weight=1.0,
-    time_extra_weight=3.0,
-    time_tolerance=0.10,
-    migration_weight=0.0,
-    progress_callback=None,
-):
-    mu_ab_grid = _unique_sorted(mu_ab_grid)
-    mu_ba_grid = _unique_sorted(mu_ba_grid)
-    seeds = _parse_seeds(seeds)
-    trajectory_points = int(trajectory_points)
+def _mean_simulation_result(simulations):
+    if len(simulations) == 0:
+        raise ValueError("simulations must contain at least one element")
 
-    if len(mu_ab_grid) < 2:
-        raise ValueError("mu_ab_grid must contain at least two values")
+    result = {}
 
-    if len(mu_ba_grid) < 2:
-        raise ValueError("mu_ba_grid must contain at least two values")
-
-    if top_k < 1:
-        raise ValueError("top_k must be positive")
-
-    if refine_steps < 0:
-        raise ValueError("refine_steps must be non-negative")
-
-    if refine_points < 2:
-        raise ValueError("refine_points must be at least 2")
-
-    if not 0 < shrink < 1:
-        raise ValueError("shrink must be between 0 and 1")
-
-    if len(seeds) == 0:
-        raise ValueError("seeds must contain at least one seed")
-
-    if trajectory_points < 2:
-        raise ValueError("trajectory_points must be at least 2")
-
-    mu_ab_min = float(mu_ab_grid.min())
-    mu_ab_max = float(mu_ab_grid.max())
-    mu_ba_min = float(mu_ba_grid.min())
-    mu_ba_max = float(mu_ba_grid.max())
-
-    radius_ab = float(np.median(np.diff(mu_ab_grid)))
-    radius_ba = float(np.median(np.diff(mu_ba_grid)))
-
-    current_pairs = _make_pair_grid(mu_ab_grid, mu_ba_grid)
-    all_rows = []
-
-    for stage in range(refine_steps + 1):
-        rows = []
-        grid_size = len(current_pairs)
-
-        for index, pair in enumerate(current_pairs, start=1):
-            mu_ab = float(pair[0])
-            mu_ba = float(pair[1])
-
-            if progress_callback is not None:
-                progress_callback(stage, refine_steps, index, grid_size, mu_ab, mu_ba)
-
-            simulations = []
-
-            for seed in seeds:
-                sim = simulate_func(mu_ab, mu_ba, seed=int(seed))
-                simulations.append(sim)
-
-            mean_sim = _mean_simulation_result(simulations)
-            dist_info = distance_components(
-                sim=mean_sim,
-                obs=obs,
-                trajectory_points=trajectory_points,
-                trajectory_weight=trajectory_weight,
-                aggregate_weight=aggregate_weight,
-                time_weight=time_weight,
-                time_extra_weight=time_extra_weight,
-                time_tolerance=time_tolerance,
-                migration_weight=migration_weight,
-            )
-
-            rows.append({
-                "stage": int(stage),
-                "mu": float((mu_ab + mu_ba) / 2.0),
-                "mu_AB_candidate": mu_ab,
-                "mu_BA_candidate": mu_ba,
-                "distance": dist_info["distance"],
-                "trajectory_distance": dist_info["trajectory_distance"],
-                "aggregate_distance": dist_info["aggregate_distance"],
-                "time_distance": dist_info["time_distance"],
-                "time_extra_distance": dist_info["time_extra_distance"],
-                "migration_distance": dist_info["migration_distance"],
-                "grid_size": int(grid_size),
-                "search_radius": float(max(radius_ab, radius_ba)),
-                "search_radius_AB": float(radius_ab),
-                "search_radius_BA": float(radius_ba),
-                "n_seeds": int(len(seeds)),
-                **mean_sim,
-            })
-
-        stage_df = (
-            pd.DataFrame(rows)
-            .sort_values("distance")
-            .reset_index(drop=True)
-        )
-
-        all_rows.append(stage_df)
-        best_pairs = stage_df.head(top_k)[["mu_AB_candidate", "mu_BA_candidate"]].to_numpy()
-
-        radius_ab *= shrink
-        radius_ba *= shrink
-        next_pairs = []
-
-        for best_mu_ab, best_mu_ba in best_pairs:
-            left_ab = max(mu_ab_min, float(best_mu_ab) - radius_ab)
-            right_ab = min(mu_ab_max, float(best_mu_ab) + radius_ab)
-            left_ba = max(mu_ba_min, float(best_mu_ba) - radius_ba)
-            right_ba = min(mu_ba_max, float(best_mu_ba) + radius_ba)
-
-            ab_values = np.linspace(left_ab, right_ab, refine_points)
-            ba_values = np.linspace(left_ba, right_ba, refine_points)
-
-            for mu_ab in ab_values:
-                for mu_ba in ba_values:
-                    next_pairs.append((mu_ab, mu_ba))
-
-        current_pairs = _unique_sorted_pairs(next_pairs)
-
-    result = pd.concat(all_rows, ignore_index=True)
-    result = result.sort_values("distance").reset_index(drop=True)
+    for col in simulations[0].keys():
+        result[col] = float(np.mean([float(sim[col]) for sim in simulations]))
 
     return result
+
+
+def _parse_seeds(seeds):
+    if isinstance(seeds, str):
+        parts = [part.strip() for part in seeds.split(",")]
+        return tuple(int(part) for part in parts if part != "")
+
+    return tuple(int(seed) for seed in seeds)
+
+
+def _validate_refine_params(top_k, refine_steps, refine_points, shrink, seeds, trajectory_points):
+    if top_k < 1:
+        raise ValueError("top_k must be positive")
+    if refine_steps < 0:
+        raise ValueError("refine_steps must be non-negative")
+    if refine_points < 2:
+        raise ValueError("refine_points must be at least 2")
+    if not 0 < shrink < 1:
+        raise ValueError("shrink must be between 0 and 1")
+    if len(seeds) == 0:
+        raise ValueError("seeds must contain at least one seed")
+    if trajectory_points < 2:
+        raise ValueError("trajectory_points must be at least 2")
 
 
 def _evaluate_mu_pair(
@@ -639,12 +359,10 @@ def _evaluate_mu_pair(
     search_radius_ab=None,
     search_radius_ba=None,
 ):
-    simulations = []
-
-    for seed in seeds:
-        sim = simulate_func(float(mu_ab), float(mu_ba), seed=int(seed))
-        simulations.append(sim)
-
+    simulations = [
+        simulate_func(float(mu_ab), float(mu_ba), seed=int(seed))
+        for seed in seeds
+    ]
     mean_sim = _mean_simulation_result(simulations)
     dist_info = distance_components(
         sim=mean_sim,
@@ -682,6 +400,182 @@ def _evaluate_mu_pair(
         row["search_radius_BA"] = float(search_radius_ba)
 
     return row
+
+
+def fit_equal_mu_refined(
+    obs,
+    mu_grid,
+    simulate_func,
+    top_k=2,
+    refine_steps=2,
+    refine_points=7,
+    shrink=0.35,
+    seeds=(1, 2, 3),
+    trajectory_points=DEFAULT_TRAJECTORY_POINTS,
+    trajectory_weight=1.0,
+    aggregate_weight=0.75,
+    time_weight=1.0,
+    time_extra_weight=3.0,
+    time_tolerance=0.10,
+    migration_weight=0.0,
+    progress_callback=None,
+):
+    mu_grid = _unique_sorted(mu_grid)
+    seeds = _parse_seeds(seeds)
+    trajectory_points = int(trajectory_points)
+
+    if len(mu_grid) < 2:
+        raise ValueError("mu_grid must contain at least two values")
+
+    _validate_refine_params(top_k, refine_steps, refine_points, shrink, seeds, trajectory_points)
+
+    mu_min = float(mu_grid.min())
+    mu_max = float(mu_grid.max())
+    radius = float(np.median(np.diff(mu_grid)))
+    current_grid = mu_grid
+    all_rows = []
+
+    for stage in range(refine_steps + 1):
+        rows = []
+        grid_size = len(current_grid)
+
+        for index, mu in enumerate(current_grid, start=1):
+            if progress_callback is not None:
+                progress_callback(stage, refine_steps, index, grid_size, float(mu))
+
+            rows.append(
+                _evaluate_mu_pair(
+                    obs=obs,
+                    mu_ab=mu,
+                    mu_ba=mu,
+                    simulate_func=simulate_func,
+                    seeds=seeds,
+                    trajectory_points=trajectory_points,
+                    trajectory_weight=trajectory_weight,
+                    aggregate_weight=aggregate_weight,
+                    time_weight=time_weight,
+                    time_extra_weight=time_extra_weight,
+                    time_tolerance=time_tolerance,
+                    migration_weight=migration_weight,
+                    stage=stage,
+                    stage_type="equal",
+                    grid_size=grid_size,
+                    search_radius=radius,
+                )
+            )
+
+        stage_df = pd.DataFrame(rows).sort_values("distance").reset_index(drop=True)
+        all_rows.append(stage_df)
+        best_mus = stage_df.head(top_k)["mu"].to_numpy()
+
+        radius *= shrink
+        next_grid_values = []
+
+        for best_mu in best_mus:
+            left = max(mu_min, float(best_mu) - radius)
+            right = min(mu_max, float(best_mu) + radius)
+            next_grid_values.extend(np.linspace(left, right, refine_points))
+
+        current_grid = _unique_sorted(next_grid_values)
+
+    return pd.concat(all_rows, ignore_index=True).sort_values("distance").reset_index(drop=True)
+
+
+def fit_unequal_mu_refined(
+    obs,
+    mu_ab_grid,
+    mu_ba_grid,
+    simulate_func,
+    top_k=3,
+    refine_steps=2,
+    refine_points=5,
+    shrink=0.35,
+    seeds=(1, 2, 3),
+    trajectory_points=DEFAULT_TRAJECTORY_POINTS,
+    trajectory_weight=1.0,
+    aggregate_weight=0.75,
+    time_weight=1.0,
+    time_extra_weight=3.0,
+    time_tolerance=0.10,
+    migration_weight=0.0,
+    progress_callback=None,
+):
+    mu_ab_grid = _unique_sorted(mu_ab_grid)
+    mu_ba_grid = _unique_sorted(mu_ba_grid)
+    seeds = _parse_seeds(seeds)
+    trajectory_points = int(trajectory_points)
+
+    if len(mu_ab_grid) < 2:
+        raise ValueError("mu_ab_grid must contain at least two values")
+    if len(mu_ba_grid) < 2:
+        raise ValueError("mu_ba_grid must contain at least two values")
+
+    _validate_refine_params(top_k, refine_steps, refine_points, shrink, seeds, trajectory_points)
+
+    mu_ab_min = float(mu_ab_grid.min())
+    mu_ab_max = float(mu_ab_grid.max())
+    mu_ba_min = float(mu_ba_grid.min())
+    mu_ba_max = float(mu_ba_grid.max())
+    radius_ab = float(np.median(np.diff(mu_ab_grid)))
+    radius_ba = float(np.median(np.diff(mu_ba_grid)))
+    current_pairs = _make_pair_grid(mu_ab_grid, mu_ba_grid)
+    all_rows = []
+
+    for stage in range(refine_steps + 1):
+        rows = []
+        grid_size = len(current_pairs)
+
+        for index, pair in enumerate(current_pairs, start=1):
+            mu_ab = float(pair[0])
+            mu_ba = float(pair[1])
+
+            if progress_callback is not None:
+                progress_callback(stage, refine_steps, index, grid_size, mu_ab, mu_ba)
+
+            rows.append(
+                _evaluate_mu_pair(
+                    obs=obs,
+                    mu_ab=mu_ab,
+                    mu_ba=mu_ba,
+                    simulate_func=simulate_func,
+                    seeds=seeds,
+                    trajectory_points=trajectory_points,
+                    trajectory_weight=trajectory_weight,
+                    aggregate_weight=aggregate_weight,
+                    time_weight=time_weight,
+                    time_extra_weight=time_extra_weight,
+                    time_tolerance=time_tolerance,
+                    migration_weight=migration_weight,
+                    stage=stage,
+                    stage_type="unequal",
+                    grid_size=grid_size,
+                    search_radius=max(radius_ab, radius_ba),
+                    search_radius_ab=radius_ab,
+                    search_radius_ba=radius_ba,
+                )
+            )
+
+        stage_df = pd.DataFrame(rows).sort_values("distance").reset_index(drop=True)
+        all_rows.append(stage_df)
+        best_pairs = stage_df.head(top_k)[["mu_AB_candidate", "mu_BA_candidate"]].to_numpy()
+
+        radius_ab *= shrink
+        radius_ba *= shrink
+        next_pairs = []
+
+        for best_mu_ab, best_mu_ba in best_pairs:
+            left_ab = max(mu_ab_min, float(best_mu_ab) - radius_ab)
+            right_ab = min(mu_ab_max, float(best_mu_ab) + radius_ab)
+            left_ba = max(mu_ba_min, float(best_mu_ba) - radius_ba)
+            right_ba = min(mu_ba_max, float(best_mu_ba) + radius_ba)
+
+            for mu_ab in np.linspace(left_ab, right_ab, refine_points):
+                for mu_ba in np.linspace(left_ba, right_ba, refine_points):
+                    next_pairs.append((mu_ab, mu_ba))
+
+        current_pairs = _unique_sorted_pairs(next_pairs)
+
+    return pd.concat(all_rows, ignore_index=True).sort_values("distance").reset_index(drop=True)
 
 
 def fit_unequal_mu_fast_refined(
@@ -797,6 +691,10 @@ def fit_unequal_mu_fast_refined(
     rough_result = rough_result.sort_values("distance").reset_index(drop=True)
     result = pd.concat([rerank_result, rough_result], ignore_index=True)
     result["stage_type_rank"] = result["stage_type"].map({"rerank": 0, "rough": 1}).fillna(2)
-    result = result.sort_values(["stage_type_rank", "distance"]).drop(columns=["stage_type_rank"]).reset_index(drop=True)
 
-    return result
+    return (
+        result
+        .sort_values(["stage_type_rank", "distance"])
+        .drop(columns=["stage_type_rank"])
+        .reset_index(drop=True)
+    )

@@ -28,7 +28,6 @@ BIRTH = 0
 DEATH = 1
 SAMPLING = 2
 MUTATION = 3
-SUSCCHANGE = 4
 MIGRATION = 5
 
 RUNS_DIR = Path("vgsim_runs")
@@ -347,9 +346,6 @@ def _build_summary_from_chain_events(
                     mig_ba += 1
                     first_mig_BA_time = t if first_mig_BA_time is None else first_mig_BA_time
 
-        elif event_type == SUSCCHANGE:
-            pass
-
         active_by_pop_hap = np.maximum(active_by_pop_hap, 0)
         current_active = active_by_pop_hap.sum(axis=1).astype(float)
 
@@ -490,12 +486,15 @@ def _thin_count(value, rate, rng):
     return float(rng.binomial(n, float(rate)))
 
 
-def apply_underreporting_to_summary(summary, trajectory_points, grid_start_frac, grid_end_frac, seed):
-    params = get_noise_params()
-    if params is None:
-        return None
-
-    reporting_rate, rate_jitter, _ = params
+def apply_underreporting_to_summary(
+    summary,
+    trajectory_points,
+    grid_start_frac,
+    grid_end_frac,
+    reporting_rate,
+    rate_jitter,
+    seed,
+):
     rng = np.random.default_rng(int(seed))
     result = dict(summary)
 
@@ -553,12 +552,7 @@ def apply_underreporting_to_summary(summary, trajectory_points, grid_start_frac,
     return result
 
 
-def apply_underreporting_to_timeline(timeline, seed):
-    params = get_noise_params()
-    if params is None:
-        return None
-
-    reporting_rate, rate_jitter, _ = params
+def apply_underreporting_to_timeline(timeline, reporting_rate, rate_jitter, seed):
     rng = np.random.default_rng(int(seed))
 
     time = np.asarray(timeline["time"], dtype=float)
@@ -602,17 +596,21 @@ def refresh_observation_target():
         if noise_params is None:
             return
 
-        _, _, noise_seed = noise_params
+        reporting_rate, rate_jitter, noise_seed = noise_params
 
         state["observed_data"] = apply_underreporting_to_summary(
             state["clean_observed_data"],
             trajectory_points,
             grid_start_frac,
             grid_end_frac,
+            reporting_rate,
+            rate_jitter,
             seed=noise_seed,
         )
         state["observed_timeline"] = apply_underreporting_to_timeline(
             state["clean_observed_timeline"],
+            reporting_rate,
+            rate_jitter,
             seed=noise_seed,
         )
 
