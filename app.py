@@ -177,7 +177,6 @@ def _weighted_quantile(values, quantiles):
 
 def _prepare_run_dir(mu_ab, mu_ba, seed):
     RUNS_DIR.mkdir(exist_ok=True)
-
     run_dir = RUNS_DIR / f"muab_{mu_ab:.8f}_muba_{mu_ba:.8f}_seed_{seed}"
 
     if run_dir.exists():
@@ -222,8 +221,8 @@ def _run_vgsim(simulator, params):
 def _load_chain_events(simulator, run_dir):
     base_path = run_dir / "chain_events"
     simulator.export_chain_events(str(base_path))
-
     npy_path = base_path.with_suffix(".npy")
+
     if not npy_path.exists():
         raise FileNotFoundError(f"Не найден файл chain events: {npy_path}")
 
@@ -407,7 +406,6 @@ def _build_summary_from_chain_events(
 
     for index, frac in enumerate(grid_fractions):
         target_time = float(frac) * float(grid_reference_t_end)
-
         result[f"grid_{index:03d}_active_A"] = _value_at_time(timeline_time, timeline_active[:, POP_A], target_time)
         result[f"grid_{index:03d}_active_B"] = _value_at_time(timeline_time, timeline_active[:, POP_B], target_time)
         result[f"grid_{index:03d}_infect_A"] = _value_at_time(timeline_time, timeline_infections[:, POP_A], target_time)
@@ -447,7 +445,6 @@ def simulate(
         simulator = _create_simulator(mu_ab, mu_ba, seed, params)
         _run_vgsim(simulator, params)
         chain_events = _load_chain_events(simulator, run_dir)
-
         return _build_summary_from_chain_events(
             chain_events=chain_events,
             trajectory_points=trajectory_points,
@@ -589,7 +586,6 @@ def noise_enabled():
     return bool(noise_enabled_var.get())
 
 
-
 def refresh_observation_target():
     if state["clean_observed_data"] is None:
         warn("Нет наблюдения", "Сначала нажми «Просимулировать».")
@@ -617,7 +613,7 @@ def refresh_observation_target():
         )
         state["observed_timeline"] = apply_underreporting_to_timeline(
             state["clean_observed_timeline"],
-            seed=noise_seed + 1,
+            seed=noise_seed,
         )
 
         if state["observed_data"] is None or state["observed_timeline"] is None:
@@ -796,162 +792,6 @@ def get_posterior_params():
         return None
 
 
-def show_abc_unequal_posterior_distribution():
-    mu_grid = get_mu_grid()
-    distance_params = get_distance_params()
-    posterior_params = get_posterior_params()
-    vgsim_params = get_vgsim_params()
-
-    if mu_grid is None or distance_params is None or posterior_params is None or vgsim_params is None:
-        return
-
-    trajectory_points, grid_start_frac, grid_end_frac = distance_params[:3]
-    grid_signature = (trajectory_points, grid_start_frac, grid_end_frac)
-
-    if not check_observation_compatibility(vgsim_params, grid_signature):
-        return
-
-    samples, epsilon_quantile, posterior_seed, bins = posterior_params
-    mu_min = float(np.min(mu_grid))
-    mu_max = float(np.max(mu_grid))
-    reference_t_end = float(state["observed_data"]["t_end"])
-    rng = np.random.default_rng(posterior_seed)
-    rows = []
-
-    try:
-        update_status("Строим unequal ABC posterior: запускаем симуляции из двумерного prior...")
-
-        for index in range(samples):
-            mu_ab = float(rng.uniform(mu_min, mu_max))
-            mu_ba = float(rng.uniform(mu_min, mu_max))
-            sim_seed = int(rng.integers(1, 2_147_483_647))
-
-            update_status(
-                f"Unequal ABC posterior: sample {index + 1}/{samples}, "
-                f"mu_AB = {mu_ab:.6f}, mu_BA = {mu_ba:.6f}"
-            )
-
-            sim = _simulate_candidate_for_distance(
-                mu_ab=mu_ab,
-                mu_ba=mu_ba,
-                seed=sim_seed,
-                distance_params=distance_params,
-                vgsim_params=vgsim_params,
-                reference_t_end=reference_t_end,
-            )
-
-            dist_info = distance_components(
-                sim=sim,
-                obs=state["observed_data"],
-                trajectory_points=trajectory_points,
-                trajectory_weight=distance_params[3],
-                aggregate_weight=distance_params[4],
-                time_weight=distance_params[5],
-                time_extra_weight=distance_params[6],
-                time_tolerance=distance_params[7],
-                migration_weight=distance_params[8],
-            )
-
-            rows.append({
-                "mu": float((mu_ab + mu_ba) / 2.0),
-                "mu_AB_candidate": mu_ab,
-                "mu_BA_candidate": mu_ba,
-                "seed": sim_seed,
-                **dist_info,
-                **sim,
-            })
-
-        posterior_df = pd.DataFrame(rows).sort_values("distance").reset_index(drop=True)
-        epsilon = float(np.quantile(posterior_df["distance"], epsilon_quantile))
-        posterior_df["accepted"] = posterior_df["distance"] <= epsilon
-
-        accepted_df = posterior_df[posterior_df["accepted"]].copy()
-
-        if accepted_df.empty:
-            warn("Нет принятых пар", "Unequal ABC posterior не построился: ни один sample не прошёл epsilon.")
-            update_status("Unequal ABC posterior: нет принятых sample.")
-            return
-
-        accepted_mu_ab = accepted_df["mu_AB_candidate"].to_numpy(dtype=float)
-        accepted_mu_ba = accepted_df["mu_BA_candidate"].to_numpy(dtype=float)
-
-        map_row = accepted_df.iloc[0]
-        map_mu_ab = float(map_row["mu_AB_candidate"])
-        map_mu_ba = float(map_row["mu_BA_candidate"])
-
-        mean_mu_ab = float(np.mean(accepted_mu_ab))
-        mean_mu_ba = float(np.mean(accepted_mu_ba))
-        median_mu_ab = float(np.median(accepted_mu_ab))
-        median_mu_ba = float(np.median(accepted_mu_ba))
-
-        low95_ab, high95_ab = _weighted_quantile(accepted_mu_ab, [0.025, 0.975])
-        low95_ba, high95_ba = _weighted_quantile(accepted_mu_ba, [0.025, 0.975])
-
-        if len(accepted_df) > 1:
-            corr = float(np.corrcoef(accepted_mu_ab, accepted_mu_ba)[0, 1])
-        else:
-            corr = float("nan")
-
-        state["last_posterior_df"] = posterior_df
-
-        noise_title = "target: noisy registered observation" if noise_enabled() else "target: clean observation"
-        path = PLOTS_DIR / "abc_posterior_unequal_mu.png"
-
-        plt.figure(figsize=(8, 7))
-        plt.scatter(
-            accepted_mu_ab,
-            accepted_mu_ba,
-            alpha=0.65,
-            label="accepted pairs",
-        )
-        plt.scatter(
-            [map_mu_ab],
-            [map_mu_ba],
-            marker="x",
-            s=120,
-            linewidths=2.5,
-            label=f"MAP = ({map_mu_ab:.6f}, {map_mu_ba:.6f})",
-        )
-        plt.axvline(mean_mu_ab, linestyle=":", linewidth=1.8, label=f"mean mu_AB = {mean_mu_ab:.6f}")
-        plt.axhline(mean_mu_ba, linestyle=":", linewidth=1.8, label=f"mean mu_BA = {mean_mu_ba:.6f}")
-        plt.xlabel("mu_AB")
-        plt.ylabel("mu_BA")
-        plt.title(
-            "ABC posterior for unequal migration\n"
-            f"{noise_title}, prior: Uniform({mu_min:.6f}, {mu_max:.6f}) x Uniform({mu_min:.6f}, {mu_max:.6f}), "
-            f"epsilon: {epsilon_quantile:.2f} quantile = {epsilon:.6f}, "
-            f"accepted: {len(accepted_df)}/{len(posterior_df)}"
-        )
-        plt.xlim(mu_min, mu_max)
-        plt.ylim(mu_min, mu_max)
-        plt.grid(True, alpha=0.3)
-        plt.legend()
-        plt.tight_layout()
-        plt.savefig(path, dpi=200)
-        plt.show()
-
-        result_label.config(
-            text=(
-                f"Unequal ABC posterior: "
-                f"MAP mu_AB = {map_mu_ab:.6f}, MAP mu_BA = {map_mu_ba:.6f}, "
-                f"mean = ({mean_mu_ab:.6f}, {mean_mu_ba:.6f}), "
-                f"median = ({median_mu_ab:.6f}, {median_mu_ba:.6f}), "
-                f"95% mu_AB = [{low95_ab:.6f}, {high95_ab:.6f}], "
-                f"95% mu_BA = [{low95_ba:.6f}, {high95_ba:.6f}], "
-                f"corr = {corr:.4f}, "
-                f"epsilon = {epsilon:.6f}, "
-                f"accepted = {len(accepted_df)}/{len(posterior_df)}."
-            )
-        )
-
-        update_status(f"Unequal ABC posterior готов. График сохранён: {path}")
-        show_table(posterior_df)
-
-    except Exception as error:
-        fail("Ошибка", f"Не удалось построить unequal ABC posterior:\n{error}")
-        update_status("Ошибка при построении unequal ABC posterior.")
-
-
 def check_observation_compatibility(vgsim_params, grid_signature):
     if state["observed_data"] is None:
         warn("Нет наблюдения", "Сначала создай тестовое наблюдение VGsim.")
@@ -970,6 +810,20 @@ def check_observation_compatibility(vgsim_params, grid_signature):
         return False
 
     return True
+
+
+def _simulate_candidate_for_distance(mu_ab, mu_ba, seed, distance_params, vgsim_params, reference_t_end):
+    trajectory_points, grid_start_frac, grid_end_frac = distance_params[:3]
+    return simulate(
+        mu_ab,
+        mu_ba,
+        seed=seed,
+        trajectory_points=trajectory_points,
+        grid_start_frac=grid_start_frac,
+        grid_end_frac=grid_end_frac,
+        reference_t_end=reference_t_end,
+        vgsim_params=vgsim_params,
+    )
 
 
 def _display_df(df):
@@ -1066,7 +920,7 @@ def _plot_active_timeline(timeline, title, output_path, clean_timeline=None, fit
             linestyle="--",
             linewidth=2.0,
             label="A fit",
-            alpha=1,
+            alpha=1.0,
         )
         plt.step(
             fit_timeline["time"],
@@ -1076,7 +930,7 @@ def _plot_active_timeline(timeline, title, output_path, clean_timeline=None, fit
             linestyle="--",
             linewidth=2.0,
             label="B fit",
-            alpha=1,
+            alpha=1.0,
         )
 
     plt.xlabel("Время")
@@ -1087,6 +941,7 @@ def _plot_active_timeline(timeline, title, output_path, clean_timeline=None, fit
     plt.tight_layout()
     plt.savefig(output_path, dpi=200)
     plt.show()
+
 
 def show_observation_plot():
     clean = state["clean_observed_timeline"] if noise_enabled() else None
@@ -1189,22 +1044,6 @@ def create_observation():
     except Exception as error:
         fail("Ошибка", f"Не удалось создать наблюдение:\n{error}")
         update_status("Ошибка при создании наблюдения.")
-
-
-def _simulate_candidate_for_distance(mu_ab, mu_ba, seed, distance_params, vgsim_params, reference_t_end):
-    trajectory_points, grid_start_frac, grid_end_frac = distance_params[:3]
-
-    return simulate(
-        mu_ab,
-        mu_ba,
-        seed=seed,
-        trajectory_points=trajectory_points,
-        grid_start_frac=grid_start_frac,
-        grid_end_frac=grid_end_frac,
-        reference_t_end=reference_t_end,
-        vgsim_params=vgsim_params,
-    )
-
 
 
 def fit_equal_mu():
@@ -1466,11 +1305,6 @@ def fit_unequal_mu_fast():
         fail("Ошибка", f"Ошибка исполнения:\n{error}")
         update_status("Ошибка исполнения.")
 
-def create_observation_and_fit():
-    create_observation()
-    if state["observed_data"] is not None:
-        fit_equal_mu()
-
 
 def show_abc_posterior_distribution():
     mu_grid = get_mu_grid()
@@ -1500,7 +1334,6 @@ def show_abc_posterior_distribution():
         for index in range(samples):
             mu = float(rng.uniform(mu_min, mu_max))
             sim_seed = int(rng.integers(1, 2_147_483_647))
-
             update_status(f"ABC posterior: sample {index + 1}/{samples}, mu = {mu:.6f}")
 
             sim = _simulate_candidate_for_distance(
@@ -1536,7 +1369,6 @@ def show_abc_posterior_distribution():
         posterior_df = pd.DataFrame(rows).sort_values("distance").reset_index(drop=True)
         epsilon = float(np.quantile(posterior_df["distance"], epsilon_quantile))
         posterior_df["accepted"] = posterior_df["distance"] <= epsilon
-
         accepted_df = posterior_df[posterior_df["accepted"]].copy()
 
         if accepted_df.empty:
@@ -1545,8 +1377,7 @@ def show_abc_posterior_distribution():
             return
 
         accepted_mu = accepted_df["mu"].to_numpy(dtype=float)
-
-        map_mu = float(accepted_df.iloc[0]["mu"])
+        best_mu = float(accepted_df.iloc[0]["mu"])
         posterior_mean = float(np.mean(accepted_mu))
         posterior_median = float(np.median(accepted_mu))
         low95, high95 = _weighted_quantile(accepted_mu, [0.025, 0.975])
@@ -1565,7 +1396,7 @@ def show_abc_posterior_distribution():
             alpha=0.65,
             label="accepted mu",
         )
-        plt.axvline(map_mu, linestyle="--", linewidth=1.5, label=f"MAP mu = {map_mu:.6f}")
+        plt.axvline(best_mu, linestyle="--", linewidth=1.5, label=f"best accepted mu = {best_mu:.6f}")
         plt.axvline(posterior_mean, linestyle=":", linewidth=1.8, label=f"mean mu = {posterior_mean:.6f}")
         plt.axvspan(low95, high95, alpha=0.15, label=f"95% interval [{low95:.6f}, {high95:.6f}]")
         plt.xlabel("mu")
@@ -1584,7 +1415,7 @@ def show_abc_posterior_distribution():
 
         result_label.config(
             text=(
-                f"ABC posterior: MAP mu = {map_mu:.6f}, "
+                f"ABC posterior: best accepted mu = {best_mu:.6f}, "
                 f"mean = {posterior_mean:.6f}, "
                 f"median = {posterior_median:.6f}, "
                 f"95% interval = [{low95:.6f}, {high95:.6f}], "
@@ -1599,6 +1430,160 @@ def show_abc_posterior_distribution():
     except Exception as error:
         fail("Ошибка", f"Не удалось построить ABC posterior:\n{error}")
         update_status("Ошибка при построении ABC posterior.")
+
+
+def show_abc_unequal_posterior_distribution():
+    mu_grid = get_mu_grid()
+    distance_params = get_distance_params()
+    posterior_params = get_posterior_params()
+    vgsim_params = get_vgsim_params()
+
+    if mu_grid is None or distance_params is None or posterior_params is None or vgsim_params is None:
+        return
+
+    trajectory_points, grid_start_frac, grid_end_frac = distance_params[:3]
+    grid_signature = (trajectory_points, grid_start_frac, grid_end_frac)
+
+    if not check_observation_compatibility(vgsim_params, grid_signature):
+        return
+
+    samples, epsilon_quantile, posterior_seed, bins = posterior_params
+    mu_min = float(np.min(mu_grid))
+    mu_max = float(np.max(mu_grid))
+    reference_t_end = float(state["observed_data"]["t_end"])
+    rng = np.random.default_rng(posterior_seed)
+    rows = []
+
+    try:
+        update_status("Строим unequal ABC posterior: запускаем симуляции из двумерного prior...")
+
+        for index in range(samples):
+            mu_ab = float(rng.uniform(mu_min, mu_max))
+            mu_ba = float(rng.uniform(mu_min, mu_max))
+            sim_seed = int(rng.integers(1, 2_147_483_647))
+            update_status(
+                f"Unequal ABC posterior: sample {index + 1}/{samples}, "
+                f"mu_AB = {mu_ab:.6f}, mu_BA = {mu_ba:.6f}"
+            )
+
+            sim = _simulate_candidate_for_distance(
+                mu_ab=mu_ab,
+                mu_ba=mu_ba,
+                seed=sim_seed,
+                distance_params=distance_params,
+                vgsim_params=vgsim_params,
+                reference_t_end=reference_t_end,
+            )
+
+            dist_info = distance_components(
+                sim=sim,
+                obs=state["observed_data"],
+                trajectory_points=trajectory_points,
+                trajectory_weight=distance_params[3],
+                aggregate_weight=distance_params[4],
+                time_weight=distance_params[5],
+                time_extra_weight=distance_params[6],
+                time_tolerance=distance_params[7],
+                migration_weight=distance_params[8],
+            )
+
+            rows.append({
+                "mu": float((mu_ab + mu_ba) / 2.0),
+                "mu_AB_candidate": mu_ab,
+                "mu_BA_candidate": mu_ba,
+                "seed": sim_seed,
+                **dist_info,
+                **sim,
+            })
+
+        posterior_df = pd.DataFrame(rows).sort_values("distance").reset_index(drop=True)
+        epsilon = float(np.quantile(posterior_df["distance"], epsilon_quantile))
+        posterior_df["accepted"] = posterior_df["distance"] <= epsilon
+        accepted_df = posterior_df[posterior_df["accepted"]].copy()
+
+        if accepted_df.empty:
+            warn("Нет принятых пар", "Unequal ABC posterior не построился: ни один sample не прошёл epsilon.")
+            update_status("Unequal ABC posterior: нет принятых sample.")
+            return
+
+        accepted_mu_ab = accepted_df["mu_AB_candidate"].to_numpy(dtype=float)
+        accepted_mu_ba = accepted_df["mu_BA_candidate"].to_numpy(dtype=float)
+
+        best_row = accepted_df.iloc[0]
+        best_mu_ab = float(best_row["mu_AB_candidate"])
+        best_mu_ba = float(best_row["mu_BA_candidate"])
+
+        mean_mu_ab = float(np.mean(accepted_mu_ab))
+        mean_mu_ba = float(np.mean(accepted_mu_ba))
+        median_mu_ab = float(np.median(accepted_mu_ab))
+        median_mu_ba = float(np.median(accepted_mu_ba))
+
+        low95_ab, high95_ab = _weighted_quantile(accepted_mu_ab, [0.025, 0.975])
+        low95_ba, high95_ba = _weighted_quantile(accepted_mu_ba, [0.025, 0.975])
+
+        if len(accepted_df) > 1:
+            corr = float(np.corrcoef(accepted_mu_ab, accepted_mu_ba)[0, 1])
+        else:
+            corr = float("nan")
+
+        state["last_posterior_df"] = posterior_df
+
+        noise_title = "target: noisy registered observation" if noise_enabled() else "target: clean observation"
+        path = PLOTS_DIR / "abc_posterior_unequal_mu.png"
+
+        plt.figure(figsize=(8, 7))
+        plt.scatter(
+            accepted_mu_ab,
+            accepted_mu_ba,
+            alpha=0.65,
+            label="accepted pairs",
+        )
+        plt.scatter(
+            [best_mu_ab],
+            [best_mu_ba],
+            marker="x",
+            s=120,
+            linewidths=2.5,
+            label=f"best accepted = ({best_mu_ab:.6f}, {best_mu_ba:.6f})",
+        )
+        plt.axvline(mean_mu_ab, linestyle=":", linewidth=1.8, label=f"mean mu_AB = {mean_mu_ab:.6f}")
+        plt.axhline(mean_mu_ba, linestyle=":", linewidth=1.8, label=f"mean mu_BA = {mean_mu_ba:.6f}")
+        plt.xlabel("mu_AB")
+        plt.ylabel("mu_BA")
+        plt.title(
+            "ABC posterior for unequal migration\n"
+            f"{noise_title}, prior: Uniform({mu_min:.6f}, {mu_max:.6f}) x Uniform({mu_min:.6f}, {mu_max:.6f}), "
+            f"epsilon: {epsilon_quantile:.2f} quantile = {epsilon:.6f}, "
+            f"accepted: {len(accepted_df)}/{len(posterior_df)}"
+        )
+        plt.xlim(mu_min, mu_max)
+        plt.ylim(mu_min, mu_max)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(path, dpi=200)
+        plt.show()
+
+        result_label.config(
+            text=(
+                f"Unequal ABC posterior: "
+                f"best accepted mu_AB = {best_mu_ab:.6f}, best accepted mu_BA = {best_mu_ba:.6f}, "
+                f"mean = ({mean_mu_ab:.6f}, {mean_mu_ba:.6f}), "
+                f"median = ({median_mu_ab:.6f}, {median_mu_ba:.6f}), "
+                f"95% mu_AB = [{low95_ab:.6f}, {high95_ab:.6f}], "
+                f"95% mu_BA = [{low95_ba:.6f}, {high95_ba:.6f}], "
+                f"corr = {corr:.4f}, "
+                f"epsilon = {epsilon:.6f}, "
+                f"accepted = {len(accepted_df)}/{len(posterior_df)}."
+            )
+        )
+
+        update_status(f"Unequal ABC posterior готов. График сохранён: {path}")
+        show_table(posterior_df)
+
+    except Exception as error:
+        fail("Ошибка", f"Не удалось построить unequal ABC posterior:\n{error}")
+        update_status("Ошибка при построении unequal ABC posterior.")
 
 
 reset_run_dirs()
@@ -1679,13 +1664,13 @@ distance_frame = ttk.LabelFrame(root, text="Параметры distance")
 distance_frame.pack(fill="x", padx=10, pady=5)
 
 trajectory_points_entry = _make_entry(distance_frame, 0, 0, "trajectory points", "100")
-grid_start_entry = _make_entry(distance_frame, 0, 2, "grid start (%)", "0.00")
-grid_end_entry = _make_entry(distance_frame, 0, 4, "grid end (%)", "1.00")
+grid_start_entry = _make_entry(distance_frame, 0, 2, "grid start frac", "0.00")
+grid_end_entry = _make_entry(distance_frame, 0, 4, "grid end frac", "1.00")
 trajectory_weight_entry = _make_entry(distance_frame, 1, 0, "trajectory weight", "1.0")
 aggregate_weight_entry = _make_entry(distance_frame, 1, 2, "aggregate weight", "0.75")
 time_weight_entry = _make_entry(distance_frame, 1, 4, "time weight", "1.0")
 time_extra_weight_entry = _make_entry(distance_frame, 1, 6, "time extra weight", "3.0")
-time_tolerance_entry = _make_entry(distance_frame, 2, 0, "time tolerance (%)", "0.10")
+time_tolerance_entry = _make_entry(distance_frame, 2, 0, "time tolerance frac", "0.10")
 migration_weight_entry = _make_entry(distance_frame, 2, 2, "migration event weight", "0.0")
 
 fit_frame = ttk.LabelFrame(root, text="Параметры поиска")
